@@ -177,12 +177,16 @@ export default function Index() {
                   <div
                     key={tv}
                     className={`w-3.5 h-3.5 rounded-full border-2 transition-all cursor-pointer ${
-                      TIERS.indexOf(tier) >= i
+                      tier && TIERS.indexOf(tier) >= i
                         ? "bg-primary border-primary"
                         : "bg-secondary border-border"
-                    }`}
-                    style={{ marginLeft: i === 0 ? "calc(33% - 7px)" : i === 1 ? "0" : "0", position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
-                    onClick={() => setTier(tv)}
+                    } ${!agentName ? "cursor-not-allowed" : ""}`}
+                    style={{ position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
+                    onClick={() => {
+                      if (!agentName) return;
+                      setTier(tv);
+                      storeAgentTier(agentName, tv);
+                    }}
                   />
                 ))}
               </div>
