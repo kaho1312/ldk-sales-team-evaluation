@@ -4,7 +4,6 @@ import ldkLogo from "@/assets/logo-ldk.jpeg";
 interface QuizHeaderProps {
   lang: Lang;
   onLangChange: (lang: Lang) => void;
-  subtitle: string;
 }
 
 export function QuizHeader({ lang, onLangChange, subtitle }: QuizHeaderProps) {
