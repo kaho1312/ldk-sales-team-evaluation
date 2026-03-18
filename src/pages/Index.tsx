@@ -111,7 +111,7 @@ export default function Index() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
       <div className="bg-card/50 border border-border/50 rounded-2xl p-6 sm:p-9 w-full max-w-[560px] backdrop-blur-sm">
-        <QuizHeader lang={lang} onLangChange={setLang} subtitle={t.subtitle} />
+        <QuizHeader lang={lang} onLangChange={setLang} />
 
         {screen === "start" && (
           <div>
