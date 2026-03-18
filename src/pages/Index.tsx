@@ -135,7 +135,11 @@ export default function Index() {
             </h1>
             <p className="text-sm text-muted-foreground mb-7 leading-relaxed">{t.startDesc}</p>
 
-            <AgentSelector lang={lang} agentName={agentName} onSelect={setAgentName} />
+            <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
+              setAgentName(name);
+              const stored = getStoredAgentTier(name);
+              setTier(stored);
+            }} />
 
             <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-3 block">
               {t.tierLabel}
