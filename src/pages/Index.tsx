@@ -52,7 +52,7 @@ export default function Index() {
   const [sheetLoaded, setSheetLoaded] = useState(false);
 
   const t = LANG[lang];
-  const tierQuestions = getQuestionsForTier(allQuestions, tier);
+  const tierQuestions = getQuestionsForTier(allQuestions, tier || "Mid");
   const q = tierQuestions[currentQ];
   const qd = q ? q[lang] : null;
 
