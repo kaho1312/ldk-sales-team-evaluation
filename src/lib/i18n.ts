@@ -44,9 +44,9 @@ export const LANG = {
   },
   es: {
     title: "Certificación de Ventas",
-    subtitle: "LDK / Kay Tours Mexico",
+    subtitle: "",
     start: "Comenzar Quiz",
-    startDesc: "Pon a prueba tu conocimiento de las políticas y procedimientos del Manual de Ventas LDK.",
+    startDesc: "Evalúa tu conocimiento del entorno de trabajo LDK y obtén tu certificación.",
     selectAgent: "Selecciona tu nombre",
     selectPlaceholder: "— Elige tu nombre —",
     addNew: "+ Nueva agente",
