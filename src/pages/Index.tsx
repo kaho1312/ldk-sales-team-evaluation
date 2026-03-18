@@ -12,10 +12,25 @@ import {
 } from "@/lib/questions";
 
 const TIERS = ["Mid", "Senior", "Lead"] as const;
+type TierType = typeof TIERS[number] | null;
 
-
-// Stored Google Sheet URL key
+const AGENT_TIER_KEY = "ldk_agent_tiers";
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
+
+function getStoredAgentTier(name: string): typeof TIERS[number] | null {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
+    return TIERS.includes(stored[name]) ? stored[name] : null;
+  } catch { return null; }
+}
+
+function storeAgentTier(name: string, tier: typeof TIERS[number]) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
+    stored[name] = tier;
+    localStorage.setItem(AGENT_TIER_KEY, JSON.stringify(stored));
+  } catch {}
+}
 
 export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
