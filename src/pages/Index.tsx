@@ -12,6 +12,7 @@ import {
 } from "@/lib/questions";
 
 const LETTERS = ["A", "B", "C", "D"];
+const TIERS = ["Mid", "Senior", "Lead"] as const;
 
 // Stored Google Sheet URL key
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
@@ -27,6 +28,7 @@ export default function Index() {
   const [coaching, setCoaching] = useState("");
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [results, setResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   // Questions state
   const [allQuestions, setAllQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
