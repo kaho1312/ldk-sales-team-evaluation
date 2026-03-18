@@ -75,7 +75,7 @@ export default function Index() {
   };
 
   const handleStart = () => {
-    if (!agentName) return;
+    if (!agentName || !tier) return;
     setResults([]);
     setCurrentQ(0);
     setSelected(null);
