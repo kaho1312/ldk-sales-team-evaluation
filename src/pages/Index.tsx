@@ -21,7 +21,7 @@ export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "quiz" | "results">("start");
   const [agentName, setAgentName] = useState("");
-  const [tier, setTier] = useState("Mid");
+  const [tier, setTier] = useState<typeof TIERS[number]>("Mid");
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [answered, setAnswered] = useState(false);
