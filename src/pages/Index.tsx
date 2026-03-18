@@ -120,6 +120,7 @@ export default function Index() {
     setAnswered(false);
     setCoaching("");
     setAgentName("");
+    setTier(null);
     setScreen("start");
   };
 
