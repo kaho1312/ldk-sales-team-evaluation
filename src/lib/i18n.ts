@@ -3,7 +3,7 @@ export type Lang = "en" | "es";
 export const LANG = {
   en: {
     title: "Sales Certification",
-    subtitle: "LDK / Kay Tours Mexico",
+    subtitle: "",
     start: "Start Quiz",
     startDesc: "Test your knowledge of LDK Sales Handbook policies and procedures.",
     selectAgent: "Select your name",
