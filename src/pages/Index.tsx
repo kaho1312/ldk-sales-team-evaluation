@@ -159,8 +159,13 @@ export default function Index() {
                     key={tv}
                     className={`text-xs font-semibold transition-all ${
                       tier === tv ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
-                    }`}
-                    onClick={() => setTier(tv)}
+                    } ${!agentName ? "opacity-40 cursor-not-allowed" : ""}`}
+                    onClick={() => {
+                      if (!agentName) return;
+                      setTier(tv);
+                      storeAgentTier(agentName, tv);
+                    }}
+                    disabled={!agentName}
                   >
                     {t.tiers[i]}
                   </button>
