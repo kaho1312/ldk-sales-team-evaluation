@@ -148,8 +148,8 @@ export default function Index() {
               {/* Progress track */}
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-300"
-                  style={{ width: tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
+                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-500"
+                  style={{ width: !tier ? "0%" : tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
                 />
               </div>
               {/* Tier labels */}
