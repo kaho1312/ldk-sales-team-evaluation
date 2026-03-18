@@ -12,7 +12,7 @@ import {
 } from "@/lib/questions";
 
 const TIERS = ["Mid", "Senior", "Lead"] as const;
-type Tier = typeof TIERS[number];
+
 
 // Stored Google Sheet URL key
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
