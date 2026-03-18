@@ -5,7 +5,7 @@ export const LANG = {
     title: "Sales Certification",
     subtitle: "",
     start: "Start Quiz",
-    startDesc: "Test your knowledge of LDK Sales Handbook policies and procedures.",
+    startDesc: "Assess your knowledge of the LDK work environment and get certified.",
     selectAgent: "Select your name",
     selectPlaceholder: "— Choose your name —",
     addNew: "+ New agent",
