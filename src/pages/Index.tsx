@@ -11,7 +11,8 @@ import {
   getQuestionsForTier,
 } from "@/lib/questions";
 
-const LETTERS = ["A", "B", "C", "D"];
+const TIERS = ["Mid", "Senior", "Lead"] as const;
+
 
 // Stored Google Sheet URL key
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
@@ -20,13 +21,14 @@ export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "quiz" | "results">("start");
   const [agentName, setAgentName] = useState("");
-  const [tier, setTier] = useState("Mid");
+  const [tier, setTier] = useState<typeof TIERS[number]>("Mid");
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [answered, setAnswered] = useState(false);
   const [coaching, setCoaching] = useState("");
   const [loadingCoach, setLoadingCoach] = useState(false);
   const [results, setResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   // Questions state
   const [allQuestions, setAllQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
@@ -109,7 +111,7 @@ export default function Index() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
       <div className="bg-card/50 border border-border/50 rounded-2xl p-6 sm:p-9 w-full max-w-[560px] backdrop-blur-sm">
-        <QuizHeader lang={lang} onLangChange={setLang} subtitle={t.subtitle} />
+        <QuizHeader lang={lang} onLangChange={setLang} />
 
         {screen === "start" && (
           <div>
@@ -120,52 +122,85 @@ export default function Index() {
 
             <AgentSelector lang={lang} agentName={agentName} onSelect={setAgentName} />
 
-            <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2.5 block">
+            <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-3 block">
               {t.tierLabel}
             </span>
-            <div className="flex gap-2 mb-6">
-              {(["Mid", "Senior", "Lead"] as const).map((tv, i) => (
-                <button
-                  key={tv}
-                  className={`flex-1 rounded-lg py-2.5 text-sm font-semibold transition-all ${
-                    tier === tv
-                      ? "bg-primary/10 border border-primary/35 text-primary"
-                      : "bg-secondary/40 border border-border text-muted-foreground hover:bg-secondary/60"
-                  }`}
-                  onClick={() => setTier(tv)}
-                >
-                  {t.tiers[i]}
-                </button>
-              ))}
+            <div className="relative mb-6">
+              {/* Progress track */}
+              <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-300"
+                  style={{ width: tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
+                />
+              </div>
+              {/* Tier labels */}
+              <div className="flex justify-between mt-2.5">
+                {TIERS.map((tv, i) => (
+                  <button
+                    key={tv}
+                    className={`text-xs font-semibold transition-all ${
+                      tier === tv ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
+                    }`}
+                    onClick={() => setTier(tv)}
+                  >
+                    {t.tiers[i]}
+                  </button>
+                ))}
+              </div>
+              {/* Active dot indicators */}
+              <div className="absolute top-0 left-0 right-0 flex justify-between" style={{ transform: "translateY(-25%)" }}>
+                {TIERS.map((tv, i) => (
+                  <div
+                    key={tv}
+                    className={`w-3.5 h-3.5 rounded-full border-2 transition-all cursor-pointer ${
+                      TIERS.indexOf(tier) >= i
+                        ? "bg-primary border-primary"
+                        : "bg-secondary border-border"
+                    }`}
+                    style={{ marginLeft: i === 0 ? "calc(33% - 7px)" : i === 1 ? "0" : "0", position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
+                    onClick={() => setTier(tv)}
+                  />
+                ))}
+              </div>
             </div>
 
-            {/* Google Sheet URL input */}
+            {/* Admin access toggle */}
             <div className="mb-6">
-              <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2 block">
-                {t.sheetUrlLabel}
-              </span>
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 bg-secondary/50 border border-border rounded-lg text-foreground text-xs py-2 px-3 outline-none focus:border-primary/40 placeholder:text-muted-foreground/30 transition-colors"
-                  placeholder={t.sheetUrlPlaceholder}
-                  value={sheetUrl}
-                  onChange={(e) => setSheetUrl(e.target.value)}
-                />
-                <button
-                  className="bg-primary/15 border border-primary/30 rounded-lg text-primary text-xs font-bold px-3 hover:bg-primary/25 transition-colors disabled:opacity-30"
-                  onClick={() => loadFromSheet(sheetUrl)}
-                  disabled={loadingSheet || !sheetUrl.trim()}
-                >
-                  {loadingSheet ? "..." : t.loadQuestions}
-                </button>
-              </div>
-              {sheetLoaded && (
-                <div className="text-[11px] text-success mt-1.5">
-                  ✓ {allQuestions.length} {t.questionsLoaded}
+              <button
+                className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+                onClick={() => setShowAdmin(!showAdmin)}
+              >
+                {t.adminAccess} {showAdmin ? "▾" : "▸"}
+              </button>
+              {showAdmin && (
+                <div className="mt-3 bg-secondary/30 border border-border/50 rounded-xl p-4">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2 block">
+                    {t.sheetUrlLabel}
+                  </span>
+                  <div className="flex gap-2">
+                    <input
+                      className="flex-1 bg-secondary/50 border border-border rounded-lg text-foreground text-xs py-2 px-3 outline-none focus:border-primary/40 placeholder:text-muted-foreground/30 transition-colors"
+                      placeholder={t.sheetUrlPlaceholder}
+                      value={sheetUrl}
+                      onChange={(e) => setSheetUrl(e.target.value)}
+                    />
+                    <button
+                      className="bg-primary/15 border border-primary/30 rounded-lg text-primary text-xs font-bold px-3 hover:bg-primary/25 transition-colors disabled:opacity-30"
+                      onClick={() => loadFromSheet(sheetUrl)}
+                      disabled={loadingSheet || !sheetUrl.trim()}
+                    >
+                      {loadingSheet ? "..." : t.loadQuestions}
+                    </button>
+                  </div>
+                  {sheetLoaded && (
+                    <div className="text-[11px] text-success mt-1.5">
+                      ✓ {allQuestions.length} {t.questionsLoaded}
+                    </div>
+                  )}
+                  {!sheetLoaded && sheetUrl && !loadingSheet && (
+                    <div className="text-[11px] text-muted-foreground mt-1.5">{t.usingFallback}</div>
+                  )}
                 </div>
-              )}
-              {!sheetLoaded && sheetUrl && !loadingSheet && (
-                <div className="text-[11px] text-muted-foreground mt-1.5">{t.usingFallback}</div>
               )}
             </div>
 

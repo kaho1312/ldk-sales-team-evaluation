@@ -4,10 +4,9 @@ import ldkLogo from "@/assets/logo-ldk.jpeg";
 interface QuizHeaderProps {
   lang: Lang;
   onLangChange: (lang: Lang) => void;
-  subtitle: string;
 }
 
-export function QuizHeader({ lang, onLangChange, subtitle }: QuizHeaderProps) {
+export function QuizHeader({ lang, onLangChange }: QuizHeaderProps) {
   return (
     <div className="flex items-center justify-between mb-8">
       <div className="flex items-center gap-3">
@@ -16,10 +15,7 @@ export function QuizHeader({ lang, onLangChange, subtitle }: QuizHeaderProps) {
           alt="LDK Logo"
           className="w-10 h-10 rounded-lg object-cover"
         />
-        <div>
-          <div className="text-sm font-bold text-foreground leading-tight">LDK Sales</div>
-          <div className="text-xs text-muted-foreground">{subtitle}</div>
-        </div>
+        <div className="text-sm font-bold text-foreground leading-tight">LDK Sales</div>
       </div>
       <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5">
         <button
