@@ -240,7 +240,7 @@ export default function Index() {
             <button
               className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
               onClick={handleStart}
-              disabled={!agentName}
+              disabled={!agentName || !tier}
             >
               {t.start} →
             </button>
