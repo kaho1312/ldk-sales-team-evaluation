@@ -12,16 +12,31 @@ import {
 } from "@/lib/questions";
 
 const TIERS = ["Mid", "Senior", "Lead"] as const;
+type TierType = typeof TIERS[number] | null;
 
-
-// Stored Google Sheet URL key
+const AGENT_TIER_KEY = "ldk_agent_tiers";
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
+
+function getStoredAgentTier(name: string): typeof TIERS[number] | null {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
+    return TIERS.includes(stored[name]) ? stored[name] : null;
+  } catch { return null; }
+}
+
+function storeAgentTier(name: string, tier: typeof TIERS[number]) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
+    stored[name] = tier;
+    localStorage.setItem(AGENT_TIER_KEY, JSON.stringify(stored));
+  } catch {}
+}
 
 export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "quiz" | "results">("start");
   const [agentName, setAgentName] = useState("");
-  const [tier, setTier] = useState<typeof TIERS[number]>("Mid");
+  const [tier, setTier] = useState<TierType>(null);
   const [currentQ, setCurrentQ] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [answered, setAnswered] = useState(false);
@@ -37,7 +52,7 @@ export default function Index() {
   const [sheetLoaded, setSheetLoaded] = useState(false);
 
   const t = LANG[lang];
-  const tierQuestions = getQuestionsForTier(allQuestions, tier);
+  const tierQuestions = getQuestionsForTier(allQuestions, tier || "Mid");
   const q = tierQuestions[currentQ];
   const qd = q ? q[lang] : null;
 
@@ -60,7 +75,7 @@ export default function Index() {
   };
 
   const handleStart = () => {
-    if (!agentName) return;
+    if (!agentName || !tier) return;
     setResults([]);
     setCurrentQ(0);
     setSelected(null);
@@ -105,6 +120,7 @@ export default function Index() {
     setAnswered(false);
     setCoaching("");
     setAgentName("");
+    setTier(null);
     setScreen("start");
   };
 
@@ -120,7 +136,11 @@ export default function Index() {
             </h1>
             <p className="text-sm text-muted-foreground mb-7 leading-relaxed">{t.startDesc}</p>
 
-            <AgentSelector lang={lang} agentName={agentName} onSelect={setAgentName} />
+            <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
+              setAgentName(name);
+              const stored = getStoredAgentTier(name);
+              setTier(stored);
+            }} />
 
             <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-3 block">
               {t.tierLabel}
@@ -129,8 +149,8 @@ export default function Index() {
               {/* Progress track */}
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-300"
-                  style={{ width: tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
+                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-500"
+                  style={{ width: !tier ? "0%" : tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
                 />
               </div>
               {/* Tier labels */}
@@ -140,8 +160,13 @@ export default function Index() {
                     key={tv}
                     className={`text-xs font-semibold transition-all ${
                       tier === tv ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
-                    }`}
-                    onClick={() => setTier(tv)}
+                    } ${!agentName ? "opacity-40 cursor-not-allowed" : ""}`}
+                    onClick={() => {
+                      if (!agentName) return;
+                      setTier(tv);
+                      storeAgentTier(agentName, tv);
+                    }}
+                    disabled={!agentName}
                   >
                     {t.tiers[i]}
                   </button>
@@ -153,12 +178,16 @@ export default function Index() {
                   <div
                     key={tv}
                     className={`w-3.5 h-3.5 rounded-full border-2 transition-all cursor-pointer ${
-                      TIERS.indexOf(tier) >= i
+                      tier && TIERS.indexOf(tier) >= i
                         ? "bg-primary border-primary"
                         : "bg-secondary border-border"
-                    }`}
-                    style={{ marginLeft: i === 0 ? "calc(33% - 7px)" : i === 1 ? "0" : "0", position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
-                    onClick={() => setTier(tv)}
+                    } ${!agentName ? "cursor-not-allowed" : ""}`}
+                    style={{ position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
+                    onClick={() => {
+                      if (!agentName) return;
+                      setTier(tv);
+                      storeAgentTier(agentName, tv);
+                    }}
                   />
                 ))}
               </div>
@@ -211,7 +240,7 @@ export default function Index() {
             <button
               className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
               onClick={handleStart}
-              disabled={!agentName}
+              disabled={!agentName || !tier}
             >
               {t.start} →
             </button>
