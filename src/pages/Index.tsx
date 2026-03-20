@@ -361,6 +361,7 @@ export default function Index() {
             graded={graded}
             isCorrect={isCorrect}
             feedback={feedback}
+            correctAnswer={correctAnswer}
             onNext={handleNext}
             isLast={currentQ + 1 >= sessionQuestions.length}
           />
