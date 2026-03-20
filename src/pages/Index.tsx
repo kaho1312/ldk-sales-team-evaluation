@@ -109,6 +109,7 @@ export default function Index() {
     setGraded(false);
     setIsCorrect(null);
     setFeedback("");
+    setCorrectAnswer("");
   };
 
   const handleSubmitAnswer = async (answer: string) => {
