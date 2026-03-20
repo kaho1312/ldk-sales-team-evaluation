@@ -188,6 +188,15 @@ export default function Index() {
       <div className="bg-card/50 border border-border/50 rounded-2xl p-6 sm:p-9 w-full max-w-[560px] backdrop-blur-sm">
         <QuizHeader lang={lang} onLangChange={setLang} />
 
+        {(screen === "start" || screen === "leaderboard") && (
+          <div className="mb-6">
+            <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">
+              {t.title}
+            </h1>
+            <p className="text-sm text-muted-foreground leading-relaxed">{t.startDesc}</p>
+          </div>
+        )}
+
         {/* Tab bar for start/leaderboard */}
         {(screen === "start" || screen === "leaderboard") && (
           <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5 mb-6">
