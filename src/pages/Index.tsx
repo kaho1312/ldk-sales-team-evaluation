@@ -212,8 +212,7 @@ export default function Index() {
             <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
               setAgentName(name);
               const stored = getStoredAgentTier(name);
-              setTier(stored || "Mid");
-              if (!stored) storeAgentTier(name, "Mid");
+              setTier(stored);
             }} />
 
             {/* Progress indicator for selected agent */}
@@ -342,7 +341,7 @@ export default function Index() {
             <button
               className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
               onClick={handleStart}
-              disabled={!agentName || !tier}
+              disabled={!agentName}
             >
               {t.start} →
             </button>
