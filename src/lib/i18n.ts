@@ -89,6 +89,13 @@ export const LANG = {
     loadingQuestions: "Cargando preguntas...",
     questionsLoaded: "preguntas cargadas de la hoja",
     usingFallback: "Usando preguntas integradas",
+    takeBreak: "Tomar un descanso",
+    breakSaved: "¡Progreso guardado! Puedes continuar cuando regreses.",
+    savedSession: "Tienes una sesión guardada",
+    savedSessionDetail: (section: string, q: number, total: number) =>
+      `Sección ${section}, Pregunta ${q} de ${total}. ¿Continuar?`,
+    resumeSession: "Continuar",
+    discardSession: "Empezar de nuevo",
   },
 };
 
