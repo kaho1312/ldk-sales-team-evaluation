@@ -227,10 +227,6 @@ export default function Index() {
 
         {screen === "start" && (
           <div>
-            <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">
-              {t.title}
-            </h1>
-            <p className="text-sm text-muted-foreground mb-7 leading-relaxed">{t.startDesc}</p>
 
             <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
               setAgentName(name);
