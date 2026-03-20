@@ -8,43 +8,46 @@ import { LANG, Lang } from "@/lib/i18n";
 import {
   QuizQuestion,
   FALLBACK_QUESTIONS,
-  fetchQuestionsFromSheet,
+  TIER_CONFIG,
+  Section,
+  getByTierAndSection,
+  getSectionCounts,
 } from "@/lib/questions";
 
-import {
-  getAgentProgress,
-  getSessionQuestions,
-  saveAnswer,
-  getProgressPercent,
-} from "@/lib/progress";
+import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
 
-const TIERS = ["Mid", "Senior", "Lead"] as const;
-
-const AGENT_TIER_KEY = "ldk_agent_tiers";
+// ── localStorage keys ────────────────────────────────────────────────────────
+const EARNED_TIER_KEY = (name: string) => `ldk_earned_tier_${name}`;
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
 
-function getStoredAgentTier(name: string): typeof TIERS[number] | null {
-  try {
-    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
-    return TIERS.includes(stored[name]) ? stored[name] : null;
-  } catch { return null; }
+function getEarnedTier(name: string): string | null {
+  return localStorage.getItem(EARNED_TIER_KEY(name));
 }
 
-function storeAgentTier(name: string, tier: typeof TIERS[number]) {
-  try {
-    const stored = JSON.parse(localStorage.getItem(AGENT_TIER_KEY) || "{}");
-    stored[name] = tier;
-    localStorage.setItem(AGENT_TIER_KEY, JSON.stringify(stored));
-  } catch {}
+function saveEarnedTier(name: string, tier: string) {
+  localStorage.setItem(EARNED_TIER_KEY(name), tier);
+}
+
+// ── Tier badge component ─────────────────────────────────────────────────────
+function TierBadge({ tier }: { tier: string }) {
+  const styles =
+    tier === "Junior"
+      ? "bg-teal-500/10 text-teal-400 border-teal-500/20"
+      : tier === "Mid-Level"
+        ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
+        : "bg-amber-500/10 text-amber-400 border-amber-500/20";
+  return <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${styles}`}>{tier} Agent</span>;
 }
 
 export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
-  const [screen, setScreen] = useState<"start" | "quiz" | "results" | "leaderboard">("start");
+  const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
   const [agentName, setAgentName] = useState("");
-  const [tier, setTier] = useState<typeof TIERS[number] | null>(null);
-  const [currentQ, setCurrentQ] = useState(0);
-  const [showAdmin, setShowAdmin] = useState(false);
+  const [earnedTier, setEarnedTier] = useState<string | null>(null);
+  const [justEarned, setJustEarned] = useState(false);
+
+  // Section selection
+  const [selectedSection, setSelectedSection] = useState<Section>("A");
 
   // Grading state
   const [grading, setGrading] = useState(false);
@@ -53,53 +56,37 @@ export default function Index() {
   const [feedback, setFeedback] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
 
-  // Session results for results screen
+  // Session
+  const [currentQ, setCurrentQ] = useState(0);
   const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
 
-  // Questions state
-  const [allQuestions, setAllQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
+  // Questions
+  const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
   const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem(SHEET_URL_KEY) || "");
-  const [loadingSheet, setLoadingSheet] = useState(false);
-  const [sheetLoaded, setSheetLoaded] = useState(false);
-
-  // Session question IDs (selected on start)
-  const [sessionIds, setSessionIds] = useState<string[]>([]);
+  const [showAdmin, setShowAdmin] = useState(false);
 
   const t = LANG[lang];
 
+  // Questions for current section
   const sessionQuestions = useMemo(
-    () => sessionIds.map((id) => allQuestions.find((q) => q.id === id)).filter(Boolean) as QuizQuestion[],
-    [sessionIds, allQuestions]
+    () => getByTierAndSection(allQuestions, "Junior", selectedSection),
+    [allQuestions, selectedSection],
   );
+
+  const sectionCounts = useMemo(() => getSectionCounts(allQuestions, "Junior"), [allQuestions]);
 
   const q = sessionQuestions[currentQ];
 
-  useEffect(() => {
-    const stored = localStorage.getItem(SHEET_URL_KEY);
-    if (stored) loadFromSheet(stored);
-  }, []);
-
-  const loadFromSheet = async (url: string) => {
-    if (!url.trim()) return;
-    setLoadingSheet(true);
-    const { questions, errors } = await fetchQuestionsFromSheet(url.trim());
-    if (errors.length > 0) console.warn("Sheet load warnings:", errors);
-    setAllQuestions(questions);
-    setSheetLoaded(questions !== FALLBACK_QUESTIONS);
-    localStorage.setItem(SHEET_URL_KEY, url.trim());
-    setLoadingSheet(false);
+  // ── Agent selection ──────────────────────────────────────────────────────
+  const handleAgentSelect = (name: string) => {
+    setAgentName(name);
+    setEarnedTier(getEarnedTier(name));
+    setJustEarned(false);
   };
 
-  const handleStart = () => {
-    if (!agentName) return;
-    const allIds = allQuestions.map((q) => q.id);
-    const ids = getSessionQuestions(agentName, allIds, 15);
-    if (ids.length === 0) {
-      // All questions answered - go straight to results
-      setScreen("results");
-      return;
-    }
-    setSessionIds(ids);
+  // ── Section selection → start quiz ──────────────────────────────────────
+  const handleSectionStart = (section: Section) => {
+    setSelectedSection(section);
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
@@ -114,34 +101,28 @@ export default function Index() {
     setCorrectAnswer("");
   };
 
+  // ── Submit answer to Lambda ──────────────────────────────────────────────
   const handleSubmitAnswer = async (answer: string) => {
     if (!q) return;
     setGrading(true);
 
-    const qd = q[lang];
-    const payload = { question: qd.question, answer };
-    console.log("Grading payload:", JSON.stringify(payload));
+    const payload = {
+      question: q.question,
+      answer,
+      modelAnswer: q.modelAnswer,
+      section: q.section,
+    };
 
     try {
-      const res = await fetch(
-        "https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }
-      );
+      const res = await fetch("https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
 
-      console.log("Grading response status:", res.status);
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error("Grading response error body:", errorText);
-        throw new Error(`Server returned ${res.status}: ${errorText}`);
-      }
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
       const data = await res.json();
-      console.log("Grading response data:", data);
       const correct = !!data.passed;
 
       setIsCorrect(correct);
@@ -151,20 +132,31 @@ export default function Index() {
       setGrading(false);
 
       saveAnswer(agentName, q.id, correct);
-      setSessionResults((prev) => [...prev, { id: q.id, question: qd.question, isCorrect: correct }]);
+      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct }]);
     } catch (err: any) {
-      console.error("Grading error:", err?.message || err);
-      console.error("Grading error full:", err);
       setIsCorrect(false);
-      setFeedback(lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.");
+      setFeedback(
+        lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.",
+      );
       setCorrectAnswer("");
       setGraded(true);
       setGrading(false);
     }
   };
 
+  // ── Next question or finish ──────────────────────────────────────────────
   const handleNext = () => {
     if (currentQ + 1 >= sessionQuestions.length) {
+      // Check if passed and award tier
+      const correctCount = sessionResults.filter((r) => r.isCorrect).length + (isCorrect ? 1 : 0);
+      const score = Math.round((correctCount / sessionQuestions.length) * 100);
+
+      if (score >= 90 && !earnedTier) {
+        saveEarnedTier(agentName, "Junior");
+        setEarnedTier("Junior");
+        setJustEarned(true);
+      }
+
       setScreen("results");
       return;
     }
@@ -172,13 +164,14 @@ export default function Index() {
     resetGrading();
   };
 
+  // ── Restart ──────────────────────────────────────────────────────────────
   const handleRestart = () => {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
     setAgentName("");
-    setTier(null);
-    setSessionIds([]);
+    setEarnedTier(null);
+    setJustEarned(false);
     setScreen("start");
   };
 
@@ -190,27 +183,25 @@ export default function Index() {
       <div className="bg-card/50 border border-border/50 rounded-2xl p-6 sm:p-9 w-full max-w-[560px] backdrop-blur-sm">
         <QuizHeader lang={lang} onLangChange={setLang} />
 
-        {(screen === "start" || screen === "leaderboard") && (
+        {/* ── Title + tabs (start / leaderboard) ── */}
+        {(screen === "start" || screen === "leaderboard" || screen === "section") && (
           <div className="mb-6">
-            <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">
-              {t.title}
-            </h1>
+            <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">{t.title}</h1>
             <p className="text-sm text-muted-foreground leading-relaxed">{t.startDesc}</p>
           </div>
         )}
 
-        {/* Tab bar for start/leaderboard */}
-        {(screen === "start" || screen === "leaderboard") && (
+        {(screen === "start" || screen === "leaderboard" || screen === "section") && (
           <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5 mb-6">
             <button
               className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
-                screen === "start"
+                screen !== "leaderboard"
                   ? "bg-primary/15 border border-primary/30 text-primary"
                   : "text-muted-foreground border border-transparent hover:text-foreground/60"
               }`}
               onClick={() => setScreen("start")}
             >
-              {lang === "es" ? "Quiz" : "Quiz"}
+              Quiz
             </button>
             <button
               className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
@@ -227,18 +218,24 @@ export default function Index() {
 
         {screen === "leaderboard" && <Leaderboard lang={lang} />}
 
+        {/* ── START SCREEN ── */}
         {screen === "start" && (
           <div>
+            <AgentSelector lang={lang} agentName={agentName} onSelect={handleAgentSelect} />
 
-            <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
-              setAgentName(name);
-              const stored = getStoredAgentTier(name);
-              setTier(stored);
-            }} />
+            {/* Earned tier badge */}
+            {agentName && earnedTier && (
+              <div className="flex items-center gap-2 mb-4">
+                <span className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">
+                  {lang === "es" ? "Nivel alcanzado" : "Achieved tier"}
+                </span>
+                <TierBadge tier={earnedTier} />
+              </div>
+            )}
 
-            {/* Progress indicator for selected agent */}
+            {/* Progress bar */}
             {agentName && (
-              <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
+              <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
                     {lang === "es" ? "Tu progreso" : "Your Progress"}
@@ -248,74 +245,20 @@ export default function Index() {
                 <div className="h-2 bg-secondary rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all duration-500 ${
-                      agentProgress?.certified
-                        ? "bg-success"
-                        : "bg-gradient-to-r from-primary/60 to-primary"
+                      agentProgress?.certified ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
                     }`}
                     style={{ width: `${progressPercent}%` }}
                   />
                 </div>
-                {agentProgress?.certified && (
-                  <div className="text-[11px] font-bold text-success mt-2">
-                    ✓ {lang === "es" ? "Agente Junior Certificada" : "Junior Agent Certified"}
-                  </div>
-                )}
-                <div className="text-[10px] text-muted-foreground/50 mt-1">
+                <div className="text-[10px] text-muted-foreground/50 mt-1.5">
                   {agentProgress?.correct.length || 0}/55 {lang === "es" ? "correctas" : "correct"}
-                  {(agentProgress?.wrong.length || 0) > 0 && ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
+                  {(agentProgress?.wrong.length || 0) > 0 &&
+                    ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
                 </div>
               </div>
             )}
 
-            <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-3 block">
-              {t.tierLabel}
-            </span>
-            <div className="relative mb-6">
-              <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-500"
-                  style={{ width: !agentName || !tier ? "0%" : tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
-                />
-              </div>
-              <div className="flex justify-between mt-2.5">
-                {TIERS.map((tv, i) => (
-                  <button
-                    key={tv}
-                    className={`text-xs font-semibold transition-all ${
-                      tier === tv ? "text-primary" : "text-muted-foreground/50 hover:text-muted-foreground"
-                    } ${!agentName ? "opacity-40 cursor-not-allowed" : ""}`}
-                    onClick={() => {
-                      if (!agentName) return;
-                      setTier(tv);
-                      storeAgentTier(agentName, tv);
-                    }}
-                    disabled={!agentName}
-                  >
-                    {t.tiers[i]}
-                  </button>
-                ))}
-              </div>
-              <div className="absolute top-0 left-0 right-0 flex justify-between" style={{ transform: "translateY(-25%)" }}>
-                {TIERS.map((tv, i) => (
-                  <div
-                    key={tv}
-                    className={`w-3.5 h-3.5 rounded-full border-2 transition-all cursor-pointer ${
-                      agentName && tier && TIERS.indexOf(tier) >= i
-                        ? "bg-primary border-primary"
-                        : "bg-secondary border-border"
-                    } ${!agentName ? "cursor-not-allowed" : ""}`}
-                    style={{ position: "absolute", left: i === 0 ? "calc(33% - 7px)" : i === 1 ? "calc(66% - 7px)" : "calc(100% - 7px)" }}
-                    onClick={() => {
-                      if (!agentName) return;
-                      setTier(tv);
-                      storeAgentTier(agentName, tv);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Admin access */}
+            {/* Admin panel */}
             <div className="mb-6">
               <button
                 className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
@@ -337,38 +280,95 @@ export default function Index() {
                     />
                     <button
                       className="bg-primary/15 border border-primary/30 rounded-lg text-primary text-xs font-bold px-3 hover:bg-primary/25 transition-colors disabled:opacity-30"
-                      onClick={() => loadFromSheet(sheetUrl)}
-                      disabled={loadingSheet || !sheetUrl.trim()}
+                      disabled={!sheetUrl.trim()}
                     >
-                      {loadingSheet ? "..." : t.loadQuestions}
+                      {t.loadQuestions}
                     </button>
                   </div>
-                  {sheetLoaded && (
-                    <div className="text-[11px] text-success mt-1.5">
-                      ✓ {allQuestions.length} {t.questionsLoaded}
-                    </div>
-                  )}
-                  {!sheetLoaded && sheetUrl && !loadingSheet && (
-                    <div className="text-[11px] text-muted-foreground mt-1.5">{t.usingFallback}</div>
-                  )}
                 </div>
               )}
             </div>
 
-            <div className="text-xs text-muted-foreground/40 text-center mb-3.5">
-              {t.passThreshold}
-            </div>
+            <div className="text-xs text-muted-foreground/40 text-center mb-3.5">{t.passThreshold}</div>
 
             <button
               className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
-              onClick={handleStart}
+              onClick={() => agentName && setScreen("section")}
               disabled={!agentName}
             >
-              {t.start} →
+              {lang === "es" ? "Seleccionar Sección →" : "Select Section →"}
             </button>
           </div>
         )}
 
+        {/* ── SECTION PICKER ── */}
+        {screen === "section" && (
+          <div>
+            <div className="mb-6">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-base font-bold text-foreground">{agentName}</span>
+                {earnedTier && <TierBadge tier={earnedTier} />}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                {lang === "es" ? "Elige una sección para comenzar" : "Choose a section to begin"}
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 mb-6">
+              {(["A", "B", "C"] as Section[]).map((sec) => {
+                const labels: Record<Section, { title: string; desc: string }> = {
+                  A: {
+                    title: lang === "es" ? "Sección A" : "Section A",
+                    desc: lang === "es" ? "Operación diaria y producto" : "Daily operations & product",
+                  },
+                  B: {
+                    title: lang === "es" ? "Sección B" : "Section B",
+                    desc: lang === "es" ? "Herramientas del día a día (Acordeón)" : "Daily tools (Acordeón)",
+                  },
+                  C: {
+                    title: lang === "es" ? "Sección C" : "Section C",
+                    desc: lang === "es" ? "Plataformas (CORAA, ODS)" : "Platforms (CORAA, ODS)",
+                  },
+                  All: { title: "All", desc: "" },
+                };
+                const count = sec === "A" ? sectionCounts.A : sec === "B" ? sectionCounts.B : sectionCounts.C;
+                return (
+                  <button
+                    key={sec}
+                    className="w-full bg-secondary/40 border border-border hover:border-primary/40 hover:bg-primary/5 rounded-xl p-4 text-left transition-all group"
+                    onClick={() => handleSectionStart(sec)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">
+                          {labels[sec].title}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">{labels[sec].desc}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-lg font-extrabold text-primary/60 group-hover:text-primary transition-colors">
+                          {count}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
+                          {lang === "es" ? "preguntas" : "questions"}
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <button
+              className="w-full bg-transparent border border-border rounded-xl text-muted-foreground text-sm font-semibold py-3 hover:border-muted-foreground/30 transition-all"
+              onClick={() => setScreen("start")}
+            >
+              ← {lang === "es" ? "Volver" : "Back"}
+            </button>
+          </div>
+        )}
+
+        {/* ── QUIZ SCREEN ── */}
         {screen === "quiz" && q && (
           <QuizQuestionView
             key={q.id}
@@ -388,13 +388,16 @@ export default function Index() {
           />
         )}
 
+        {/* ── RESULTS SCREEN ── */}
         {screen === "results" && (
           <QuizResults
             lang={lang}
             agentName={agentName}
-            tier={tier}
+            earnedTier={earnedTier}
+            section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
+            justEarned={justEarned}
             onRestart={handleRestart}
           />
         )}
