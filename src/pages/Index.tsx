@@ -116,25 +116,35 @@ export default function Index() {
     if (!q) return;
     setGrading(true);
 
-    // For now, simulate AI grading with explanation-based check
-    // TODO: Replace with Claude AI edge function
     const qd = q[lang];
-    setTimeout(() => {
-      // Simple heuristic: check if answer contains key words from explanation
-      const explanation = qd.explanation.toLowerCase();
-      const answerLower = answer.toLowerCase();
-      const keywords = explanation.split(/\s+/).filter((w) => w.length > 4);
-      const matchCount = keywords.filter((kw) => answerLower.includes(kw)).length;
-      const correct = matchCount >= Math.max(2, Math.floor(keywords.length * 0.2));
+    try {
+      const res = await fetch(
+        "https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: qd.question, answer }),
+        }
+      );
+      const data = await res.json();
+      const correct = !!data.passed;
 
       setIsCorrect(correct);
-      setFeedback(correct ? "" : qd.explanation);
+      setFeedback(data.feedback || "");
+      setCorrectAnswer(!correct && data.correct_answer ? data.correct_answer : "");
       setGraded(true);
       setGrading(false);
 
       saveAnswer(agentName, q.id, correct);
       setSessionResults((prev) => [...prev, { id: q.id, question: qd.question, isCorrect: correct }]);
-    }, 1200);
+    } catch (err) {
+      console.error("Grading error:", err);
+      setIsCorrect(false);
+      setFeedback(lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.");
+      setCorrectAnswer("");
+      setGraded(true);
+      setGrading(false);
+    }
   };
 
   const handleNext = () => {
