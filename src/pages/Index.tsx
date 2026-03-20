@@ -15,9 +15,11 @@ import {
 } from "@/lib/questions";
 
 import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
+import { toast } from "sonner";
 
 // ── localStorage keys ────────────────────────────────────────────────────────
 const EARNED_TIER_KEY = (name: string) => `ldk_earned_tier_${name}`;
+const BREAK_KEY = (name: string) => `ldk_break_${name}`;
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
 
 function getEarnedTier(name: string): string | null {
@@ -26,6 +28,29 @@ function getEarnedTier(name: string): string | null {
 
 function saveEarnedTier(name: string, tier: string) {
   localStorage.setItem(EARNED_TIER_KEY(name), tier);
+}
+
+interface SavedBreak {
+  agentName: string;
+  section: Section;
+  currentQuestionIndex: number;
+  answers: { id: string; question: string; isCorrect: boolean }[];
+  score: number;
+  savedAt: string;
+  totalQuestions: number;
+}
+
+function getSavedBreak(name: string): SavedBreak | null {
+  try {
+    const raw = localStorage.getItem(BREAK_KEY(name));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearSavedBreak(name: string) {
+  localStorage.removeItem(BREAK_KEY(name));
 }
 
 // ── Tier badge component ─────────────────────────────────────────────────────
@@ -65,6 +90,9 @@ export default function Index() {
   const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem(SHEET_URL_KEY) || "");
   const [showAdmin, setShowAdmin] = useState(false);
 
+  // Saved break
+  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(null);
+
   const t = LANG[lang];
 
   // Questions for current section
@@ -82,6 +110,43 @@ export default function Index() {
     setAgentName(name);
     setEarnedTier(getEarnedTier(name));
     setJustEarned(false);
+    setSavedBreak(getSavedBreak(name));
+  };
+
+  // ── Resume from break ──────────────────────────────────────────────────
+  const handleResume = () => {
+    if (!savedBreak) return;
+    setSelectedSection(savedBreak.section);
+    setCurrentQ(savedBreak.currentQuestionIndex);
+    setSessionResults(savedBreak.answers);
+    resetGrading();
+    clearSavedBreak(agentName);
+    setSavedBreak(null);
+    setScreen("quiz");
+  };
+
+  const handleDiscardBreak = () => {
+    clearSavedBreak(agentName);
+    setSavedBreak(null);
+  };
+
+  // ── Take a break ──────────────────────────────────────────────────────
+  const handleBreak = () => {
+    const breakData: SavedBreak = {
+      agentName,
+      section: selectedSection,
+      currentQuestionIndex: currentQ,
+      answers: sessionResults,
+      score: sessionResults.filter((r) => r.isCorrect).length,
+      savedAt: new Date().toISOString(),
+      totalQuestions: sessionQuestions.length,
+    };
+    localStorage.setItem(BREAK_KEY(agentName), JSON.stringify(breakData));
+    toast.success(t.breakSaved);
+    setSessionResults([]);
+    setCurrentQ(0);
+    resetGrading();
+    setScreen("start");
   };
 
   // ── Section selection → start quiz ──────────────────────────────────────
@@ -147,7 +212,6 @@ export default function Index() {
   // ── Next question or finish ──────────────────────────────────────────────
   const handleNext = () => {
     if (currentQ + 1 >= sessionQuestions.length) {
-      // Check if passed and award tier
       const correctCount = sessionResults.filter((r) => r.isCorrect).length + (isCorrect ? 1 : 0);
       const score = Math.round((correctCount / sessionQuestions.length) * 100);
 
@@ -156,6 +220,9 @@ export default function Index() {
         setEarnedTier("Junior");
         setJustEarned(true);
       }
+
+      // Clear any saved break on finish
+      clearSavedBreak(agentName);
 
       setScreen("results");
       return;
@@ -172,6 +239,7 @@ export default function Index() {
     setAgentName("");
     setEarnedTier(null);
     setJustEarned(false);
+    setSavedBreak(null);
     setScreen("start");
   };
 
@@ -222,6 +290,34 @@ export default function Index() {
         {screen === "start" && (
           <div>
             <AgentSelector lang={lang} agentName={agentName} onSelect={handleAgentSelect} />
+
+            {/* Saved break resume card */}
+            {agentName && savedBreak && (
+              <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 mb-4">
+                <div className="text-sm font-bold text-foreground mb-1">{t.savedSession}</div>
+                <div className="text-xs text-muted-foreground mb-3">
+                  {t.savedSessionDetail(
+                    savedBreak.section,
+                    savedBreak.currentQuestionIndex + 1,
+                    savedBreak.totalQuestions,
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="flex-1 bg-gradient-to-r from-primary to-primary/80 rounded-lg text-primary-foreground text-xs font-bold py-2.5 hover:brightness-110 transition-all"
+                    onClick={handleResume}
+                  >
+                    {t.resumeSession}
+                  </button>
+                  <button
+                    className="flex-1 border border-border rounded-lg text-muted-foreground text-xs font-semibold py-2.5 hover:border-muted-foreground/30 transition-all"
+                    onClick={handleDiscardBreak}
+                  >
+                    {t.discardSession}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Earned tier badge */}
             {agentName && earnedTier && (
@@ -384,6 +480,7 @@ export default function Index() {
             feedback={feedback}
             correctAnswer={correctAnswer}
             onNext={handleNext}
+            onBreak={handleBreak}
             isLast={currentQ + 1 >= sessionQuestions.length}
           />
         )}
