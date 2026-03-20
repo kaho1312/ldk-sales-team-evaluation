@@ -82,7 +82,8 @@ export default function Index() {
   const loadFromSheet = async (url: string) => {
     if (!url.trim()) return;
     setLoadingSheet(true);
-    const questions = await fetchQuestionsFromSheet(url.trim());
+    const { questions, errors } = await fetchQuestionsFromSheet(url.trim());
+    if (errors.length > 0) console.warn("Sheet load warnings:", errors);
     setAllQuestions(questions);
     setSheetLoaded(questions !== FALLBACK_QUESTIONS);
     localStorage.setItem(SHEET_URL_KEY, url.trim());
