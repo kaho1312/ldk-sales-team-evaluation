@@ -41,6 +41,13 @@ export const LANG = {
     loadingQuestions: "Loading questions...",
     questionsLoaded: "questions loaded from sheet",
     usingFallback: "Using built-in questions",
+    takeBreak: "Take a Break",
+    breakSaved: "Progress saved! You can pick up where you left off.",
+    savedSession: "You have a saved session",
+    savedSessionDetail: (section: string, q: number, total: number) =>
+      `Section ${section}, Question ${q} of ${total}. Continue?`,
+    resumeSession: "Continue",
+    discardSession: "Start Over",
   },
   es: {
     title: "Certificación de Ventas",
