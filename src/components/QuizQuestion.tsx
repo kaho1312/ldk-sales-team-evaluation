@@ -13,6 +13,7 @@ interface QuizQuestionProps {
   graded: boolean;
   isCorrect: boolean | null;
   feedback: string;
+  correctAnswer: string;
   onNext: () => void;
   isLast: boolean;
 }
@@ -28,6 +29,7 @@ export function QuizQuestionView({
   graded,
   isCorrect,
   feedback,
+  correctAnswer,
   onNext,
   isLast,
 }: QuizQuestionProps) {
