@@ -212,8 +212,7 @@ export default function Index() {
             <AgentSelector lang={lang} agentName={agentName} onSelect={(name) => {
               setAgentName(name);
               const stored = getStoredAgentTier(name);
-              setTier(stored || "Mid");
-              if (!stored) storeAgentTier(name, "Mid");
+              setTier(stored);
             }} />
 
             {/* Progress indicator for selected agent */}
