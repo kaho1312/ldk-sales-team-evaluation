@@ -34,7 +34,6 @@ export function QuizQuestionView({
   isLast,
 }: QuizQuestionProps) {
   const t = LANG[lang];
-  const qd = question[lang];
   const progress = ((currentIndex + (graded ? 1 : 0)) / totalQuestions) * 100;
   const [answer, setAnswer] = useState("");
 
@@ -60,7 +59,7 @@ export function QuizQuestionView({
       </div>
 
       <h2 className="text-foreground text-[17px] font-semibold leading-relaxed mb-5 tracking-tight">
-        {qd.question}
+        {question.question}
       </h2>
 
       {!graded && (
@@ -83,8 +82,10 @@ export function QuizQuestionView({
                 <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
                 {t.loadingCoach}
               </span>
+            ) : lang === "es" ? (
+              "Enviar Respuesta"
             ) : (
-              lang === "es" ? "Enviar Respuesta" : "Submit Answer"
+              "Submit Answer"
             )}
           </button>
         </div>
