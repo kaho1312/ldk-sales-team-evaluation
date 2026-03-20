@@ -13,9 +13,9 @@ export function QuizHeader({ lang, onLangChange }: QuizHeaderProps) {
         <img
           src={ldkLogo}
           alt="LDK Logo"
-          className="w-10 h-10 rounded-lg object-cover"
+          className="w-14 h-14 rounded-xl object-cover"
         />
-        <div className="text-sm font-bold text-foreground leading-tight">LDK Sales</div>
+        <div className="text-base font-bold text-foreground leading-tight">LDK Sales</div>
       </div>
       <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5">
         <button
