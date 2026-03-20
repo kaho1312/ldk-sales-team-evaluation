@@ -1,18 +1,23 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { QuizHeader } from "@/components/QuizHeader";
 import { AgentSelector } from "@/components/AgentSelector";
 import { QuizQuestionView } from "@/components/QuizQuestion";
 import { QuizResults } from "@/components/QuizResults";
+import { Leaderboard } from "@/components/Leaderboard";
 import { LANG, Lang } from "@/lib/i18n";
 import {
   QuizQuestion,
   FALLBACK_QUESTIONS,
   fetchQuestionsFromSheet,
-  getQuestionsForTier,
 } from "@/lib/questions";
+import {
+  getAgentProgress,
+  getSessionQuestions,
+  saveAnswer,
+  getProgressPercent,
+} from "@/lib/progress";
 
 const TIERS = ["Mid", "Senior", "Lead"] as const;
-type TierType = typeof TIERS[number] | null;
 
 const AGENT_TIER_KEY = "ldk_agent_tiers";
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
@@ -34,16 +39,20 @@ function storeAgentTier(name: string, tier: typeof TIERS[number]) {
 
 export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
-  const [screen, setScreen] = useState<"start" | "quiz" | "results">("start");
+  const [screen, setScreen] = useState<"start" | "quiz" | "results" | "leaderboard">("start");
   const [agentName, setAgentName] = useState("");
-  const [tier, setTier] = useState<TierType>(null);
+  const [tier, setTier] = useState<typeof TIERS[number] | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [answered, setAnswered] = useState(false);
-  const [coaching, setCoaching] = useState("");
-  const [loadingCoach, setLoadingCoach] = useState(false);
-  const [results, setResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
   const [showAdmin, setShowAdmin] = useState(false);
+
+  // Grading state
+  const [grading, setGrading] = useState(false);
+  const [graded, setGraded] = useState(false);
+  const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
+  const [feedback, setFeedback] = useState("");
+
+  // Session results for results screen
+  const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
 
   // Questions state
   const [allQuestions, setAllQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
@@ -51,17 +60,21 @@ export default function Index() {
   const [loadingSheet, setLoadingSheet] = useState(false);
   const [sheetLoaded, setSheetLoaded] = useState(false);
 
-  const t = LANG[lang];
-  const tierQuestions = getQuestionsForTier(allQuestions, tier || "Mid");
-  const q = tierQuestions[currentQ];
-  const qd = q ? q[lang] : null;
+  // Session question IDs (selected on start)
+  const [sessionIds, setSessionIds] = useState<string[]>([]);
 
-  // Auto-load sheet on mount if URL is stored
+  const t = LANG[lang];
+
+  const sessionQuestions = useMemo(
+    () => sessionIds.map((id) => allQuestions.find((q) => q.id === id)).filter(Boolean) as QuizQuestion[],
+    [sessionIds, allQuestions]
+  );
+
+  const q = sessionQuestions[currentQ];
+
   useEffect(() => {
     const stored = localStorage.getItem(SHEET_URL_KEY);
-    if (stored) {
-      loadFromSheet(stored);
-    }
+    if (stored) loadFromSheet(stored);
   }, []);
 
   const loadFromSheet = async (url: string) => {
@@ -76,58 +89,106 @@ export default function Index() {
 
   const handleStart = () => {
     if (!agentName || !tier) return;
-    setResults([]);
+    const allIds = allQuestions.map((q) => q.id);
+    const ids = getSessionQuestions(agentName, allIds, 15);
+    if (ids.length === 0) {
+      // All questions answered - go straight to results
+      setScreen("results");
+      return;
+    }
+    setSessionIds(ids);
+    setSessionResults([]);
     setCurrentQ(0);
-    setSelected(null);
-    setAnswered(false);
-    setCoaching("");
+    resetGrading();
     setScreen("quiz");
   };
 
-  const handleSelect = async (letter: string) => {
-    if (answered || !q || !qd) return;
-    setSelected(letter);
-    setAnswered(true);
-    const isCorrect = letter === q.correct;
-    setResults((prev) => [...prev, { id: q.id, question: qd.question, isCorrect }]);
+  const resetGrading = () => {
+    setGrading(false);
+    setGraded(false);
+    setIsCorrect(null);
+    setFeedback("");
+  };
 
-    if (!isCorrect) {
-      setLoadingCoach(true);
-      // AI coaching will be added via edge function later
-      // For now show the explanation from the question data
-      setTimeout(() => {
-        setCoaching(qd.explanation);
-        setLoadingCoach(false);
-      }, 800);
-    }
+  const handleSubmitAnswer = async (answer: string) => {
+    if (!q) return;
+    setGrading(true);
+
+    // For now, simulate AI grading with explanation-based check
+    // TODO: Replace with Claude AI edge function
+    const qd = q[lang];
+    setTimeout(() => {
+      // Simple heuristic: check if answer contains key words from explanation
+      const explanation = qd.explanation.toLowerCase();
+      const answerLower = answer.toLowerCase();
+      const keywords = explanation.split(/\s+/).filter((w) => w.length > 4);
+      const matchCount = keywords.filter((kw) => answerLower.includes(kw)).length;
+      const correct = matchCount >= Math.max(2, Math.floor(keywords.length * 0.2));
+
+      setIsCorrect(correct);
+      setFeedback(correct ? "" : qd.explanation);
+      setGraded(true);
+      setGrading(false);
+
+      saveAnswer(agentName, q.id, correct);
+      setSessionResults((prev) => [...prev, { id: q.id, question: qd.question, isCorrect: correct }]);
+    }, 1200);
   };
 
   const handleNext = () => {
-    if (currentQ + 1 >= tierQuestions.length) {
+    if (currentQ + 1 >= sessionQuestions.length) {
       setScreen("results");
       return;
     }
     setCurrentQ((p) => p + 1);
-    setSelected(null);
-    setAnswered(false);
-    setCoaching("");
+    resetGrading();
   };
 
   const handleRestart = () => {
-    setResults([]);
+    setSessionResults([]);
     setCurrentQ(0);
-    setSelected(null);
-    setAnswered(false);
-    setCoaching("");
+    resetGrading();
     setAgentName("");
     setTier(null);
+    setSessionIds([]);
     setScreen("start");
   };
+
+  const progressPercent = agentName ? getProgressPercent(agentName) : 0;
+  const agentProgress = agentName ? getAgentProgress(agentName) : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
       <div className="bg-card/50 border border-border/50 rounded-2xl p-6 sm:p-9 w-full max-w-[560px] backdrop-blur-sm">
         <QuizHeader lang={lang} onLangChange={setLang} />
+
+        {/* Tab bar for start/leaderboard */}
+        {(screen === "start" || screen === "leaderboard") && (
+          <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5 mb-6">
+            <button
+              className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                screen === "start"
+                  ? "bg-primary/15 border border-primary/30 text-primary"
+                  : "text-muted-foreground border border-transparent hover:text-foreground/60"
+              }`}
+              onClick={() => setScreen("start")}
+            >
+              {lang === "es" ? "Quiz" : "Quiz"}
+            </button>
+            <button
+              className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                screen === "leaderboard"
+                  ? "bg-primary/15 border border-primary/30 text-primary"
+                  : "text-muted-foreground border border-transparent hover:text-foreground/60"
+              }`}
+              onClick={() => setScreen("leaderboard")}
+            >
+              {lang === "es" ? "Clasificación" : "Leaderboard"}
+            </button>
+          </div>
+        )}
+
+        {screen === "leaderboard" && <Leaderboard lang={lang} />}
 
         {screen === "start" && (
           <div>
@@ -142,18 +203,47 @@ export default function Index() {
               setTier(stored);
             }} />
 
+            {/* Progress indicator for selected agent */}
+            {agentName && (
+              <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
+                    {lang === "es" ? "Tu progreso" : "Your Progress"}
+                  </span>
+                  <span className="text-xs font-bold text-primary tabular-nums">{progressPercent}%</span>
+                </div>
+                <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      agentProgress?.certified
+                        ? "bg-success"
+                        : "bg-gradient-to-r from-primary/60 to-primary"
+                    }`}
+                    style={{ width: `${progressPercent}%` }}
+                  />
+                </div>
+                {agentProgress?.certified && (
+                  <div className="text-[11px] font-bold text-success mt-2">
+                    ✓ {lang === "es" ? "Agente Junior Certificada" : "Junior Agent Certified"}
+                  </div>
+                )}
+                <div className="text-[10px] text-muted-foreground/50 mt-1">
+                  {agentProgress?.correct.length || 0}/55 {lang === "es" ? "correctas" : "correct"}
+                  {(agentProgress?.wrong.length || 0) > 0 && ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
+                </div>
+              </div>
+            )}
+
             <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-3 block">
               {t.tierLabel}
             </span>
             <div className="relative mb-6">
-              {/* Progress track */}
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-primary/60 to-primary rounded-full transition-all duration-500"
-                  style={{ width: !tier ? "0%" : tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
+                  style={{ width: !agentName || !tier ? "0%" : tier === "Mid" ? "33%" : tier === "Senior" ? "66%" : "100%" }}
                 />
               </div>
-              {/* Tier labels */}
               <div className="flex justify-between mt-2.5">
                 {TIERS.map((tv, i) => (
                   <button
@@ -172,13 +262,12 @@ export default function Index() {
                   </button>
                 ))}
               </div>
-              {/* Active dot indicators */}
               <div className="absolute top-0 left-0 right-0 flex justify-between" style={{ transform: "translateY(-25%)" }}>
                 {TIERS.map((tv, i) => (
                   <div
                     key={tv}
                     className={`w-3.5 h-3.5 rounded-full border-2 transition-all cursor-pointer ${
-                      tier && TIERS.indexOf(tier) >= i
+                      agentName && tier && TIERS.indexOf(tier) >= i
                         ? "bg-primary border-primary"
                         : "bg-secondary border-border"
                     } ${!agentName ? "cursor-not-allowed" : ""}`}
@@ -193,7 +282,7 @@ export default function Index() {
               </div>
             </div>
 
-            {/* Admin access toggle */}
+            {/* Admin access */}
             <div className="mb-6">
               <button
                 className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
@@ -234,7 +323,7 @@ export default function Index() {
             </div>
 
             <div className="text-xs text-muted-foreground/40 text-center mb-3.5">
-              {tierQuestions.length} {t.questions} · {t.passThreshold}
+              15 {t.questions} · {t.passThreshold}
             </div>
 
             <button
@@ -247,20 +336,20 @@ export default function Index() {
           </div>
         )}
 
-        {screen === "quiz" && q && qd && (
+        {screen === "quiz" && q && (
           <QuizQuestionView
             question={q}
             lang={lang}
             agentName={agentName}
             currentIndex={currentQ}
-            totalQuestions={tierQuestions.length}
-            selected={selected}
-            answered={answered}
-            coaching={coaching}
-            loadingCoach={loadingCoach}
-            onSelect={handleSelect}
+            totalQuestions={sessionQuestions.length}
+            onSubmitAnswer={handleSubmitAnswer}
+            grading={grading}
+            graded={graded}
+            isCorrect={isCorrect}
+            feedback={feedback}
             onNext={handleNext}
-            isLast={currentQ + 1 >= tierQuestions.length}
+            isLast={currentQ + 1 >= sessionQuestions.length}
           />
         )}
 
@@ -269,8 +358,8 @@ export default function Index() {
             lang={lang}
             agentName={agentName}
             tier={tier}
-            results={results}
-            totalQuestions={tierQuestions.length}
+            results={sessionResults}
+            totalQuestions={sessionQuestions.length || sessionResults.length}
             onRestart={handleRestart}
           />
         )}
