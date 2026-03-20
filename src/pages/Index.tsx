@@ -89,7 +89,7 @@ export default function Index() {
   };
 
   const handleStart = () => {
-    if (!agentName || !tier) return;
+    if (!agentName) return;
     const allIds = allQuestions.map((q) => q.id);
     const ids = getSessionQuestions(agentName, allIds, 15);
     if (ids.length === 0) {
