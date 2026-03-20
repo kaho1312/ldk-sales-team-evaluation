@@ -15,6 +15,7 @@ interface QuizQuestionProps {
   feedback: string;
   correctAnswer: string;
   onNext: () => void;
+  onBreak: () => void;
   isLast: boolean;
 }
 
@@ -31,6 +32,7 @@ export function QuizQuestionView({
   feedback,
   correctAnswer,
   onNext,
+  onBreak,
   isLast,
 }: QuizQuestionProps) {
   const t = LANG[lang];
@@ -87,6 +89,13 @@ export function QuizQuestionView({
             ) : (
               "Submit Answer"
             )}
+          </button>
+          <button
+            className="w-full border border-border rounded-xl text-muted-foreground text-xs font-semibold py-2.5 mt-2 hover:border-muted-foreground/30 hover:text-foreground/60 transition-all"
+            onClick={onBreak}
+            disabled={grading}
+          >
+            {t.takeBreak}
           </button>
         </div>
       )}

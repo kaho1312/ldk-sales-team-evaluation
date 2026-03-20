@@ -41,6 +41,13 @@ export const LANG = {
     loadingQuestions: "Loading questions...",
     questionsLoaded: "questions loaded from sheet",
     usingFallback: "Using built-in questions",
+    takeBreak: "Take a Break",
+    breakSaved: "Progress saved! You can pick up where you left off.",
+    savedSession: "You have a saved session",
+    savedSessionDetail: (section: string, q: number, total: number) =>
+      `Section ${section}, Question ${q} of ${total}. Continue?`,
+    resumeSession: "Continue",
+    discardSession: "Start Over",
   },
   es: {
     title: "Certificación de Ventas",
@@ -82,6 +89,13 @@ export const LANG = {
     loadingQuestions: "Cargando preguntas...",
     questionsLoaded: "preguntas cargadas de la hoja",
     usingFallback: "Usando preguntas integradas",
+    takeBreak: "Tomar un descanso",
+    breakSaved: "¡Progreso guardado! Puedes continuar cuando regreses.",
+    savedSession: "Tienes una sesión guardada",
+    savedSessionDetail: (section: string, q: number, total: number) =>
+      `Sección ${section}, Pregunta ${q} de ${total}. ¿Continuar?`,
+    resumeSession: "Continuar",
+    discardSession: "Empezar de nuevo",
   },
 };
 
