@@ -50,6 +50,7 @@ export default function Index() {
   const [graded, setGraded] = useState(false);
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [feedback, setFeedback] = useState("");
+  const [correctAnswer, setCorrectAnswer] = useState("");
 
   // Session results for results screen
   const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
