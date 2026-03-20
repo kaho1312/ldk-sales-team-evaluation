@@ -117,16 +117,29 @@ export default function Index() {
     setGrading(true);
 
     const qd = q[lang];
+    const payload = { question: qd.question, answer };
+    console.log("Grading payload:", JSON.stringify(payload));
+
     try {
       const res = await fetch(
         "https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: qd.question, answer }),
+          body: JSON.stringify(payload),
         }
       );
+
+      console.log("Grading response status:", res.status);
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Grading response error body:", errorText);
+        throw new Error(`Server returned ${res.status}: ${errorText}`);
+      }
+
       const data = await res.json();
+      console.log("Grading response data:", data);
       const correct = !!data.passed;
 
       setIsCorrect(correct);
@@ -137,8 +150,9 @@ export default function Index() {
 
       saveAnswer(agentName, q.id, correct);
       setSessionResults((prev) => [...prev, { id: q.id, question: qd.question, isCorrect: correct }]);
-    } catch (err) {
-      console.error("Grading error:", err);
+    } catch (err: any) {
+      console.error("Grading error:", err?.message || err);
+      console.error("Grading error full:", err);
       setIsCorrect(false);
       setFeedback(lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.");
       setCorrectAnswer("");
