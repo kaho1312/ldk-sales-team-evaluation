@@ -354,7 +354,7 @@ export default function Index() {
             </div>
 
             <div className="text-xs text-muted-foreground/40 text-center mb-3.5">
-              15 {t.questions} · {t.passThreshold}
+              {t.passThreshold}
             </div>
 
             <button
