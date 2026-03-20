@@ -13,6 +13,7 @@ interface QuizQuestionProps {
   graded: boolean;
   isCorrect: boolean | null;
   feedback: string;
+  correctAnswer: string;
   onNext: () => void;
   isLast: boolean;
 }
@@ -28,6 +29,7 @@ export function QuizQuestionView({
   graded,
   isCorrect,
   feedback,
+  correctAnswer,
   onNext,
   isLast,
 }: QuizQuestionProps) {
@@ -104,6 +106,14 @@ export function QuizQuestionView({
             <div className="mt-2 bg-primary/5 border border-primary/15 rounded-lg p-3">
               <div className="text-[11px] font-bold tracking-wider uppercase text-primary mb-1">{t.coaching}</div>
               <div className="text-sm text-muted-foreground leading-relaxed">{feedback}</div>
+            </div>
+          )}
+          {correctAnswer && (
+            <div className="mt-2 bg-success/5 border border-success/15 rounded-lg p-3">
+              <div className="text-[11px] font-bold tracking-wider uppercase text-success mb-1">
+                {lang === "es" ? "Respuesta Correcta" : "Correct Answer"}
+              </div>
+              <div className="text-sm text-muted-foreground leading-relaxed">{correctAnswer}</div>
             </div>
           )}
         </div>
