@@ -338,6 +338,7 @@ export default function Index() {
 
         {screen === "quiz" && q && (
           <QuizQuestionView
+            key={q.id}
             question={q}
             lang={lang}
             agentName={agentName}
