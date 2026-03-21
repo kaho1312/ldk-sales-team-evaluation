@@ -170,6 +170,7 @@ export default function Index() {
       testMode,
     };
     localStorage.setItem(BREAK_KEY(agentKey), JSON.stringify(breakData));
+    setSavedBreak(breakData);
     toast.success(t.breakSaved);
     setSessionResults([]);
     setCurrentQ(0);

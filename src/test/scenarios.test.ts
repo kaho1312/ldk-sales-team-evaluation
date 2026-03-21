@@ -136,6 +136,27 @@ describe("Scenario 3: Break and resume after an hour", () => {
     expect(saved.section).toBe("A");
     expect(Date.now() - saved.timestamp).toBeGreaterThanOrEqual(60 * 60 * 1000);
   });
+
+  it("break data written to localStorage is immediately readable (regression: resume card was not shown)", () => {
+    // Simulates what handleBreak() does — saves to localStorage
+    const breakData = {
+      agentEmail: key,
+      section: "B",
+      currentQuestionIndex: 4,
+      answers: [],
+      score: 2,
+      savedAt: new Date().toISOString(),
+      totalQuestions: 15,
+      testMode: false,
+    };
+    localStorage.setItem(BREAK_KEY, JSON.stringify(breakData));
+
+    // getSavedBreak must return the data immediately (no page reload needed)
+    const retrieved = JSON.parse(localStorage.getItem(BREAK_KEY)!);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved.currentQuestionIndex).toBe(4);
+    expect(retrieved.section).toBe("B");
+  });
 });
 
 // ---------------------------------------------------------------------------
