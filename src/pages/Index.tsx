@@ -15,19 +15,30 @@ import {
 
 import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
 import { getCurrentSession, logout } from "@/lib/auth";
+import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
 
 // ── localStorage keys ────────────────────────────────────────────────────────
-const EARNED_TIER_KEY = (email: string) => `ldk_earned_tier_${email}`;
+// Each tier has its own key so multiple certs can be earned independently
+const EARNED_TIER_KEY = (email: string, tier: string) => `ldk_earned_tier_${tier}_${email}`;
 const BREAK_KEY = (email: string) => `ldk_break_${email}`;
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
 
-function getEarnedTier(email: string): string | null {
-  return localStorage.getItem(EARNED_TIER_KEY(email));
+const ALL_TIERS = ["Junior", "Mid-Level", "Senior"] as const;
+
+function getEarnedTiers(email: string): Set<string> {
+  const earned = new Set<string>();
+  for (const tier of ALL_TIERS) {
+    if (localStorage.getItem(EARNED_TIER_KEY(email, tier))) earned.add(tier);
+  }
+  // Backward compat: check old single-key format
+  const legacy = localStorage.getItem(`ldk_earned_tier_${email}`);
+  if (legacy) earned.add(legacy);
+  return earned;
 }
 
 function saveEarnedTier(email: string, tier: string) {
-  localStorage.setItem(EARNED_TIER_KEY(email), tier);
+  localStorage.setItem(EARNED_TIER_KEY(email, tier), "1");
 }
 
 interface SavedBreak {
@@ -73,8 +84,8 @@ export default function Index() {
 
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
-  const [earnedTier, setEarnedTier] = useState<string | null>(() => getEarnedTier(agentKey));
-  const [justEarned, setJustEarned] = useState(false);
+  const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiers(agentKey));
+  const [justEarned, setJustEarned] = useState<string | null>(null); // tier name just earned, or null
 
   // Section selection
   const [selectedSection, setSelectedSection] = useState<Section>("A");
@@ -233,10 +244,12 @@ export default function Index() {
       const correctCount = sessionResults.filter((r) => r.isCorrect).length + (isCorrect ? 1 : 0);
       const score = Math.round((correctCount / sessionQuestions.length) * 100);
 
-      if (score >= 90 && !earnedTier) {
-        saveEarnedTier(agentKey, "Junior");
-        setEarnedTier("Junior");
-        setJustEarned(true);
+      // Currently only Junior tier is achievable (Mid-Level & Senior questions TBD)
+      const activeTier = "Junior";
+      if (score >= 90 && !earnedTiers.has(activeTier)) {
+        saveEarnedTier(agentKey, activeTier);
+        setEarnedTiers((prev) => new Set([...prev, activeTier]));
+        setJustEarned(activeTier);
       }
 
       clearSavedBreak(agentKey);
@@ -252,7 +265,7 @@ export default function Index() {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
-    setJustEarned(false);
+    setJustEarned(null);
     setTestMode(false);
     setSavedBreak(getSavedBreak(agentKey));
     setScreen("start");
@@ -311,17 +324,26 @@ export default function Index() {
         {/* ── START SCREEN ── */}
         {screen === "start" && (
           <div>
-            {/* User greeting */}
+            {/* User greeting + certification badges */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
-              <div className="flex items-center justify-between">
+              <div className="flex items-start justify-between gap-2 mb-1">
                 <div>
                   <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
                     {lang === "es" ? "Bienvenida" : "Welcome"}
                   </span>
-                  <div className="text-base font-bold text-foreground mt-0.5">{displayName}</div>
+                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                    <span className="text-base font-bold text-foreground">{displayName}</span>
+                    {[...earnedTiers].map((t) => <TierBadge key={t} tier={t} />)}
+                  </div>
                   <div className="text-[11px] text-muted-foreground/50">{session.email}</div>
                 </div>
-                {earnedTier && <TierBadge tier={earnedTier} />}
+              </div>
+              {/* Certification badge placeholders */}
+              <div className="mt-2">
+                <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground/50">
+                  {lang === "es" ? "Certificaciones" : "Certifications"}
+                </span>
+                <CertificationBadges earnedTiers={earnedTiers} lang={lang} />
               </div>
             </div>
 
@@ -422,9 +444,9 @@ export default function Index() {
         {screen === "section" && (
           <div>
             <div className="mb-6">
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="text-base font-bold text-foreground">{displayName}</span>
-                {earnedTier && <TierBadge tier={earnedTier} />}
+                {[...earnedTiers].map((t) => <TierBadge key={t} tier={t} />)}
               </div>
               <p className="text-sm text-muted-foreground">
                 {lang === "es" ? "Elige una sección para comenzar" : "Choose a section to begin"}
@@ -545,11 +567,11 @@ export default function Index() {
           <QuizResults
             lang={lang}
             agentName={displayName}
-            earnedTier={earnedTier}
+            earnedTier={justEarned ?? ([...earnedTiers][earnedTiers.size - 1] ?? null)}
             section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
-            justEarned={justEarned}
+            justEarned={!!justEarned}
             onRestart={handleRestart}
           />
         )}

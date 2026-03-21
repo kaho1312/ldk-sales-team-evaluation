@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { register } from "@/lib/auth";
+import ldkLogo from "@/assets/logo-ldk.jpeg";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -29,8 +30,16 @@ export default function Register() {
       <div className="bg-card/50 border border-border/50 rounded-2xl p-8 w-full max-w-[400px] backdrop-blur-sm">
         {/* Logo / Brand */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
-            <span className="text-2xl font-extrabold text-primary">LDK</span>
+          <div className="inline-block mb-4">
+            <img
+              src={ldkLogo}
+              alt="LDK Logo"
+              className="w-20 h-20 object-cover"
+              style={{
+                borderRadius: "5px",
+                boxShadow: "0 0 18px 4px #30bdff, 0 0 6px 2px #30bdff88",
+              }}
+            />
           </div>
           <h1 className="text-xl font-extrabold text-foreground tracking-tight">Crear Cuenta</h1>
           <p className="text-sm text-muted-foreground mt-1">Solo correos @ldk.lat</p>
