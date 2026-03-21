@@ -13,7 +13,11 @@ export function QuizHeader({ lang, onLangChange }: QuizHeaderProps) {
         <img
           src={ldkLogo}
           alt="LDK Logo"
-          className="w-14 h-14 rounded-xl object-cover"
+          className="w-12 h-12 object-cover shrink-0"
+          style={{
+            borderRadius: "5px",
+            boxShadow: "0 0 12px 3px #30bdff, 0 0 4px 1px #30bdff88",
+          }}
         />
         <div className="text-base font-bold text-foreground leading-tight">LDK Sales</div>
       </div>
