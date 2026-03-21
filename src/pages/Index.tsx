@@ -221,7 +221,13 @@ export default function Index() {
       const correct = !!data.passed;
 
       setIsCorrect(correct);
-      setFeedback(data.feedback || "");
+      const rawFeedback = data.feedback || "";
+      const personalizedFeedback = rawFeedback
+        .replace(/\bEl agente\b/g, "Tu respuesta")
+        .replace(/\bel agente\b/g, "tu respuesta")
+        .replace(/\bThe agent\b/g, "Your answer")
+        .replace(/\bthe agent\b/g, "your answer");
+      setFeedback(personalizedFeedback);
       setCorrectAnswer(!correct && data.correct_answer ? data.correct_answer : "");
       setGraded(true);
       setGrading(false);
