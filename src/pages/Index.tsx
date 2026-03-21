@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { QuizHeader } from "@/components/QuizHeader";
-import { AgentSelector } from "@/components/AgentSelector";
 import { QuizQuestionView } from "@/components/QuizQuestion";
 import { QuizResults } from "@/components/QuizResults";
 import { Leaderboard } from "@/components/Leaderboard";
@@ -8,49 +8,50 @@ import { LANG, Lang } from "@/lib/i18n";
 import {
   QuizQuestion,
   FALLBACK_QUESTIONS,
-  TIER_CONFIG,
   Section,
   getByTierAndSection,
   getSectionCounts,
 } from "@/lib/questions";
 
 import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
+import { getCurrentSession, logout } from "@/lib/auth";
 import { toast } from "sonner";
 
 // ── localStorage keys ────────────────────────────────────────────────────────
-const EARNED_TIER_KEY = (name: string) => `ldk_earned_tier_${name}`;
-const BREAK_KEY = (name: string) => `ldk_break_${name}`;
+const EARNED_TIER_KEY = (email: string) => `ldk_earned_tier_${email}`;
+const BREAK_KEY = (email: string) => `ldk_break_${email}`;
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
 
-function getEarnedTier(name: string): string | null {
-  return localStorage.getItem(EARNED_TIER_KEY(name));
+function getEarnedTier(email: string): string | null {
+  return localStorage.getItem(EARNED_TIER_KEY(email));
 }
 
-function saveEarnedTier(name: string, tier: string) {
-  localStorage.setItem(EARNED_TIER_KEY(name), tier);
+function saveEarnedTier(email: string, tier: string) {
+  localStorage.setItem(EARNED_TIER_KEY(email), tier);
 }
 
 interface SavedBreak {
-  agentName: string;
+  agentEmail: string;
   section: Section;
   currentQuestionIndex: number;
   answers: { id: string; question: string; isCorrect: boolean }[];
   score: number;
   savedAt: string;
   totalQuestions: number;
+  testMode: boolean;
 }
 
-function getSavedBreak(name: string): SavedBreak | null {
+function getSavedBreak(email: string): SavedBreak | null {
   try {
-    const raw = localStorage.getItem(BREAK_KEY(name));
+    const raw = localStorage.getItem(BREAK_KEY(email));
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-function clearSavedBreak(name: string) {
-  localStorage.removeItem(BREAK_KEY(name));
+function clearSavedBreak(email: string) {
+  localStorage.removeItem(BREAK_KEY(email));
 }
 
 // ── Tier badge component ─────────────────────────────────────────────────────
@@ -65,14 +66,21 @@ function TierBadge({ tier }: { tier: string }) {
 }
 
 export default function Index() {
+  const navigate = useNavigate();
+  const session = getCurrentSession()!;
+  const agentKey = session.email; // unique key for progress storage
+  const displayName = `${session.firstName} ${session.lastName}`;
+
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
-  const [agentName, setAgentName] = useState("");
-  const [earnedTier, setEarnedTier] = useState<string | null>(null);
+  const [earnedTier, setEarnedTier] = useState<string | null>(() => getEarnedTier(agentKey));
   const [justEarned, setJustEarned] = useState(false);
 
   // Section selection
   const [selectedSection, setSelectedSection] = useState<Section>("A");
+
+  // Test mode (3 questions only)
+  const [testMode, setTestMode] = useState(false);
 
   // Grading state
   const [grading, setGrading] = useState(false);
@@ -91,26 +99,33 @@ export default function Index() {
   const [showAdmin, setShowAdmin] = useState(false);
 
   // Saved break
-  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(null);
+  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBreak(agentKey));
 
   const t = LANG[lang];
 
-  // Questions for current section
-  const sessionQuestions = useMemo(
+  // Questions for current section (full set)
+  const sectionQuestions = useMemo(
     () => getByTierAndSection(allQuestions, "Junior", selectedSection),
     [allQuestions, selectedSection],
+  );
+
+  // Active session questions: limited to 3 in test mode
+  const sessionQuestions = useMemo(
+    () => (testMode ? sectionQuestions.slice(0, 3) : sectionQuestions),
+    [sectionQuestions, testMode],
   );
 
   const sectionCounts = useMemo(() => getSectionCounts(allQuestions, "Junior"), [allQuestions]);
 
   const q = sessionQuestions[currentQ];
 
-  // ── Agent selection ──────────────────────────────────────────────────────
-  const handleAgentSelect = (name: string) => {
-    setAgentName(name);
-    setEarnedTier(getEarnedTier(name));
-    setJustEarned(false);
-    setSavedBreak(getSavedBreak(name));
+  const progressPercent = getProgressPercent(agentKey);
+  const agentProgress = getAgentProgress(agentKey);
+
+  // ── Logout ───────────────────────────────────────────────────────────────
+  const handleLogout = () => {
+    logout();
+    navigate("/login");
   };
 
   // ── Resume from break ──────────────────────────────────────────────────
@@ -119,29 +134,31 @@ export default function Index() {
     setSelectedSection(savedBreak.section);
     setCurrentQ(savedBreak.currentQuestionIndex);
     setSessionResults(savedBreak.answers);
+    setTestMode(savedBreak.testMode ?? false);
     resetGrading();
-    clearSavedBreak(agentName);
+    clearSavedBreak(agentKey);
     setSavedBreak(null);
     setScreen("quiz");
   };
 
   const handleDiscardBreak = () => {
-    clearSavedBreak(agentName);
+    clearSavedBreak(agentKey);
     setSavedBreak(null);
   };
 
   // ── Take a break ──────────────────────────────────────────────────────
   const handleBreak = () => {
     const breakData: SavedBreak = {
-      agentName,
+      agentEmail: agentKey,
       section: selectedSection,
       currentQuestionIndex: currentQ,
       answers: sessionResults,
       score: sessionResults.filter((r) => r.isCorrect).length,
       savedAt: new Date().toISOString(),
       totalQuestions: sessionQuestions.length,
+      testMode,
     };
-    localStorage.setItem(BREAK_KEY(agentName), JSON.stringify(breakData));
+    localStorage.setItem(BREAK_KEY(agentKey), JSON.stringify(breakData));
     toast.success(t.breakSaved);
     setSessionResults([]);
     setCurrentQ(0);
@@ -150,8 +167,9 @@ export default function Index() {
   };
 
   // ── Section selection → start quiz ──────────────────────────────────────
-  const handleSectionStart = (section: Section) => {
+  const handleSectionStart = (section: Section, isTestMode = false) => {
     setSelectedSection(section);
+    setTestMode(isTestMode);
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
@@ -196,9 +214,9 @@ export default function Index() {
       setGraded(true);
       setGrading(false);
 
-      saveAnswer(agentName, q.id, correct);
+      saveAnswer(agentKey, q.id, correct);
       setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct }]);
-    } catch (err: any) {
+    } catch {
       setIsCorrect(false);
       setFeedback(
         lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.",
@@ -216,14 +234,12 @@ export default function Index() {
       const score = Math.round((correctCount / sessionQuestions.length) * 100);
 
       if (score >= 90 && !earnedTier) {
-        saveEarnedTier(agentName, "Junior");
+        saveEarnedTier(agentKey, "Junior");
         setEarnedTier("Junior");
         setJustEarned(true);
       }
 
-      // Clear any saved break on finish
-      clearSavedBreak(agentName);
-
+      clearSavedBreak(agentKey);
       setScreen("results");
       return;
     }
@@ -236,15 +252,11 @@ export default function Index() {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
-    setAgentName("");
-    setEarnedTier(null);
     setJustEarned(false);
-    setSavedBreak(null);
+    setTestMode(false);
+    setSavedBreak(getSavedBreak(agentKey));
     setScreen("start");
   };
-
-  const progressPercent = agentName ? getProgressPercent(agentName) : 0;
-  const agentProgress = agentName ? getAgentProgress(agentName) : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
@@ -254,8 +266,18 @@ export default function Index() {
         {/* ── Title + tabs (start / leaderboard) ── */}
         {(screen === "start" || screen === "leaderboard" || screen === "section") && (
           <div className="mb-6">
-            <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">{t.title}</h1>
-            <p className="text-sm text-muted-foreground leading-relaxed">{t.startDesc}</p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">{t.title}</h1>
+                <p className="text-sm text-muted-foreground leading-relaxed">{t.startDesc}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-destructive/60 transition-colors mt-1 shrink-0 ml-4"
+              >
+                {lang === "es" ? "Salir" : "Logout"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -289,10 +311,22 @@ export default function Index() {
         {/* ── START SCREEN ── */}
         {screen === "start" && (
           <div>
-            <AgentSelector lang={lang} agentName={agentName} onSelect={handleAgentSelect} />
+            {/* User greeting */}
+            <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
+                    {lang === "es" ? "Bienvenida" : "Welcome"}
+                  </span>
+                  <div className="text-base font-bold text-foreground mt-0.5">{displayName}</div>
+                  <div className="text-[11px] text-muted-foreground/50">{session.email}</div>
+                </div>
+                {earnedTier && <TierBadge tier={earnedTier} />}
+              </div>
+            </div>
 
             {/* Saved break resume card */}
-            {agentName && savedBreak && (
+            {savedBreak && (
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 mb-4">
                 <div className="text-sm font-bold text-foreground mb-1">{t.savedSession}</div>
                 <div className="text-xs text-muted-foreground mb-3">
@@ -319,40 +353,28 @@ export default function Index() {
               </div>
             )}
 
-            {/* Earned tier badge */}
-            {agentName && earnedTier && (
-              <div className="flex items-center gap-2 mb-4">
-                <span className="text-[11px] text-muted-foreground uppercase tracking-wider font-bold">
-                  {lang === "es" ? "Nivel alcanzado" : "Achieved tier"}
-                </span>
-                <TierBadge tier={earnedTier} />
-              </div>
-            )}
-
             {/* Progress bar */}
-            {agentName && (
-              <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
-                    {lang === "es" ? "Tu progreso" : "Your Progress"}
-                  </span>
-                  <span className="text-xs font-bold text-primary tabular-nums">{progressPercent}%</span>
-                </div>
-                <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      agentProgress?.certified ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
-                    }`}
-                    style={{ width: `${progressPercent}%` }}
-                  />
-                </div>
-                <div className="text-[10px] text-muted-foreground/50 mt-1.5">
-                  {agentProgress?.correct.length || 0}/55 {lang === "es" ? "correctas" : "correct"}
-                  {(agentProgress?.wrong.length || 0) > 0 &&
-                    ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
-                </div>
+            <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
+                  {lang === "es" ? "Tu progreso" : "Your Progress"}
+                </span>
+                <span className="text-xs font-bold text-primary tabular-nums">{progressPercent}%</span>
               </div>
-            )}
+              <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    agentProgress?.certified ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
+                  }`}
+                  style={{ width: `${progressPercent}%` }}
+                />
+              </div>
+              <div className="text-[10px] text-muted-foreground/50 mt-1.5">
+                {agentProgress?.correct.length || 0}/55 {lang === "es" ? "correctas" : "correct"}
+                {(agentProgress?.wrong.length || 0) > 0 &&
+                  ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
+              </div>
+            </div>
 
             {/* Admin panel */}
             <div className="mb-6">
@@ -388,9 +410,8 @@ export default function Index() {
             <div className="text-xs text-muted-foreground/40 text-center mb-3.5">{t.passThreshold}</div>
 
             <button
-              className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all disabled:opacity-20 disabled:cursor-not-allowed"
-              onClick={() => agentName && setScreen("section")}
-              disabled={!agentName}
+              className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all"
+              onClick={() => setScreen("section")}
             >
               {lang === "es" ? "Seleccionar Sección →" : "Select Section →"}
             </button>
@@ -402,7 +423,7 @@ export default function Index() {
           <div>
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-base font-bold text-foreground">{agentName}</span>
+                <span className="text-base font-bold text-foreground">{displayName}</span>
                 {earnedTier && <TierBadge tier={earnedTier} />}
               </div>
               <p className="text-sm text-muted-foreground">
@@ -410,7 +431,7 @@ export default function Index() {
               </p>
             </div>
 
-            <div className="flex flex-col gap-3 mb-6">
+            <div className="flex flex-col gap-3 mb-4">
               {(["A", "B", "C"] as Section[]).map((sec) => {
                 const labels: Record<Section, { title: string; desc: string }> = {
                   A: {
@@ -432,7 +453,7 @@ export default function Index() {
                   <button
                     key={sec}
                     className="w-full bg-secondary/40 border border-border hover:border-primary/40 hover:bg-primary/5 rounded-xl p-4 text-left transition-all group"
-                    onClick={() => handleSectionStart(sec)}
+                    onClick={() => handleSectionStart(sec, false)}
                   >
                     <div className="flex items-center justify-between">
                       <div>
@@ -455,6 +476,33 @@ export default function Index() {
               })}
             </div>
 
+            {/* Quick Test mode */}
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-0.5">
+                    {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {lang === "es"
+                      ? "Solo 3 preguntas · Ideal para verificar que todo funciona"
+                      : "Only 3 questions · Ideal for verifying everything works"}
+                  </div>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                {(["A", "B", "C"] as Section[]).map((sec) => (
+                  <button
+                    key={sec}
+                    className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-xs font-bold py-2 hover:bg-amber-500/20 transition-colors"
+                    onClick={() => handleSectionStart(sec, true)}
+                  >
+                    {lang === "es" ? `Sec. ${sec}` : `Sec. ${sec}`} · 3
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <button
               className="w-full bg-transparent border border-border rounded-xl text-muted-foreground text-sm font-semibold py-3 hover:border-muted-foreground/30 transition-all"
               onClick={() => setScreen("start")}
@@ -466,30 +514,37 @@ export default function Index() {
 
         {/* ── QUIZ SCREEN ── */}
         {screen === "quiz" && q && (
-          <QuizQuestionView
-            key={q.id}
-            question={q}
-            lang={lang}
-            agentName={agentName}
-            currentIndex={currentQ}
-            totalQuestions={sessionQuestions.length}
-            onSubmitAnswer={handleSubmitAnswer}
-            grading={grading}
-            graded={graded}
-            isCorrect={isCorrect}
-            feedback={feedback}
-            correctAnswer={correctAnswer}
-            onNext={handleNext}
-            onBreak={handleBreak}
-            isLast={currentQ + 1 >= sessionQuestions.length}
-          />
+          <>
+            {testMode && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5 mb-4 text-[11px] font-bold text-amber-400 uppercase tracking-wider text-center">
+                {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"} · 3 {lang === "es" ? "preguntas" : "questions"}
+              </div>
+            )}
+            <QuizQuestionView
+              key={q.id}
+              question={q}
+              lang={lang}
+              agentName={displayName}
+              currentIndex={currentQ}
+              totalQuestions={sessionQuestions.length}
+              onSubmitAnswer={handleSubmitAnswer}
+              grading={grading}
+              graded={graded}
+              isCorrect={isCorrect}
+              feedback={feedback}
+              correctAnswer={correctAnswer}
+              onNext={handleNext}
+              onBreak={handleBreak}
+              isLast={currentQ + 1 >= sessionQuestions.length}
+            />
+          </>
         )}
 
         {/* ── RESULTS SCREEN ── */}
         {screen === "results" && (
           <QuizResults
             lang={lang}
-            agentName={agentName}
+            agentName={displayName}
             earnedTier={earnedTier}
             section={selectedSection}
             results={sessionResults}

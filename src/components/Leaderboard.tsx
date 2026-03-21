@@ -36,6 +36,11 @@ export function Leaderboard({ lang }: LeaderboardProps) {
   return (
     <div>
       <h2 className="text-lg font-bold text-foreground mb-5 tracking-tight">{lb.title}</h2>
+      {agents.length === 0 && (
+        <div className="text-center text-sm text-muted-foreground py-8">
+          {lang === "es" ? "Aún no hay usuarios registrados." : "No registered users yet."}
+        </div>
+      )}
       <div className="flex flex-col gap-2.5">
         {agents.map((agent, i) => (
           <div
