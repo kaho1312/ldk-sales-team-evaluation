@@ -14,6 +14,7 @@ import {
 } from "@/lib/questions";
 
 import { getAgentProgress, saveAnswer, getProgressPercent, TOTAL_QUESTIONS, getCertThreshold } from "@/lib/progress";
+import { syncProgressToSupabase } from "@/lib/supabase";
 import { getCurrentSession, logout } from "@/lib/auth";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -34,6 +35,9 @@ function getEarnedTiers(email: string): Set<string> {
   // Backward compat: check old single-key format
   const legacy = localStorage.getItem(`ldk_earned_tier_${email}`);
   if (legacy) earned.add(legacy);
+  // progress.certified is the authoritative source — if true, Junior is earned
+  // regardless of whether a session completed cleanly after crossing the threshold
+  if (getAgentProgress(email).certified) earned.add("Junior");
   return earned;
 }
 
@@ -259,6 +263,8 @@ export default function Index() {
       }
 
       clearSavedBreak(agentKey);
+      // Push latest progress to the shared Supabase leaderboard (fire-and-forget)
+      syncProgressToSupabase(agentKey).catch(() => {});
       setScreen("results");
       return;
     }

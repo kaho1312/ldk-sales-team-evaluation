@@ -1,3 +1,5 @@
+import { syncUserToSupabase } from "./supabase";
+
 const USERS_KEY = "ldk_users";
 const SESSION_KEY = "ldk_current_session";
 
@@ -90,6 +92,9 @@ export async function register(
 
   users[normalizedEmail] = user;
   saveUsers(users);
+
+  // Sync to shared Supabase leaderboard (fire-and-forget — never blocks registration)
+  syncUserToSupabase(normalizedEmail, user.firstName, user.lastName).catch(() => {});
 
   const session: Session = {
     email: normalizedEmail,
