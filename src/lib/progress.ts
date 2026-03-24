@@ -38,8 +38,8 @@ export function saveAnswer(key: string, questionId: string, isCorrect: boolean) 
     prog.wrong.push(questionId);
   }
 
-  // Check certification
-  prog.certified = prog.correct.length >= Math.ceil(TOTAL_QUESTIONS * CERT_THRESHOLD);
+  // Check certification — threshold is floor(total × 0.9), e.g. 49 out of 55
+  prog.certified = prog.correct.length >= Math.floor(TOTAL_QUESTIONS * CERT_THRESHOLD);
 
   all[key] = prog;
   saveAll(all);
@@ -91,6 +91,11 @@ export function getLeaderboard(): { name: string; email: string; percent: number
       };
     })
     .sort((a, b) => b.percent - a.percent);
+}
+
+/** Returns the minimum correct answers needed to certify for a given total. */
+export function getCertThreshold(total: number): number {
+  return Math.floor(total * CERT_THRESHOLD);
 }
 
 export { TOTAL_QUESTIONS, CERT_THRESHOLD };

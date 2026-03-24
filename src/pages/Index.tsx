@@ -13,7 +13,7 @@ import {
   getSectionCounts,
 } from "@/lib/questions";
 
-import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
+import { getAgentProgress, saveAnswer, getProgressPercent, TOTAL_QUESTIONS, getCertThreshold } from "@/lib/progress";
 import { getCurrentSession, logout } from "@/lib/auth";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -248,12 +248,11 @@ export default function Index() {
   // ── Next question or finish ──────────────────────────────────────────────
   const handleNext = () => {
     if (currentQ + 1 >= sessionQuestions.length) {
-      const correctCount = sessionResults.filter((r) => r.isCorrect).length + (isCorrect ? 1 : 0);
-      const score = Math.round((correctCount / sessionQuestions.length) * 100);
-
-      // Currently only Junior tier is achievable (Mid-Level & Senior questions TBD)
+      // Certification is based on cumulative correct across ALL sessions, not this session alone.
+      // saveAnswer already updated localStorage before handleNext runs, so progress is current.
       const activeTier = "Junior";
-      if (score >= 90 && !earnedTiers.has(activeTier)) {
+      const updatedProgress = getAgentProgress(agentKey);
+      if (updatedProgress.certified && !earnedTiers.has(activeTier)) {
         saveEarnedTier(agentKey, activeTier);
         setEarnedTiers((prev) => new Set([...prev, activeTier]));
         setJustEarned(activeTier);
@@ -579,6 +578,9 @@ export default function Index() {
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
             justEarned={!!justEarned}
+            cumulativeCorrect={agentProgress.correct.length}
+            cumulativeTotal={TOTAL_QUESTIONS}
+            cumulativeThreshold={getCertThreshold(TOTAL_QUESTIONS)}
             onRestart={handleRestart}
           />
         )}
