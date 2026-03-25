@@ -248,12 +248,10 @@ export default function Index() {
   // ── Next question or finish ──────────────────────────────────────────────
   const handleNext = () => {
     if (currentQ + 1 >= sessionQuestions.length) {
-      const correctCount = sessionResults.filter((r) => r.isCorrect).length + (isCorrect ? 1 : 0);
-      const score = Math.round((correctCount / sessionQuestions.length) * 100);
-
-      // Currently only Junior tier is achievable (Mid-Level & Senior questions TBD)
+      // Check cumulative certification across all 55 questions (not just this session)
       const activeTier = "Junior";
-      if (score >= 90 && !earnedTiers.has(activeTier)) {
+      const latestProgress = getAgentProgress(agentKey);
+      if (latestProgress.certified && !earnedTiers.has(activeTier)) {
         saveEarnedTier(agentKey, activeTier);
         setEarnedTiers((prev) => new Set([...prev, activeTier]));
         setJustEarned(activeTier);
@@ -578,6 +576,8 @@ export default function Index() {
             section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
+            cumulativeCorrect={getAgentProgress(agentKey).correct.length}
+            cumulativeTotal={55}
             justEarned={!!justEarned}
             onRestart={handleRestart}
           />
