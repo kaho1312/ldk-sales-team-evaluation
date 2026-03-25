@@ -13,6 +13,8 @@ interface QuizResultsProps {
   section: string;
   results: QuizResult[];
   totalQuestions: number;
+  cumulativeCorrect: number;
+  cumulativeTotal: number;
   justEarned: boolean;
   onRestart: () => void;
 }
@@ -24,6 +26,8 @@ export function QuizResults({
   section,
   results,
   totalQuestions,
+  cumulativeCorrect,
+  cumulativeTotal,
   justEarned,
   onRestart,
 }: QuizResultsProps) {
@@ -31,7 +35,8 @@ export function QuizResults({
   const correctCount = results.filter((r) => r.isCorrect).length;
   const wrongCount = results.filter((r) => !r.isCorrect).length;
   const finalScore = Math.round((correctCount / totalQuestions) * 100);
-  const passed = finalScore >= 90;
+  const cumulativeScore = Math.round((cumulativeCorrect / cumulativeTotal) * 100);
+  const passed = cumulativeScore >= 90;
 
   const sectionLabel =
     section === "A"
@@ -64,10 +69,15 @@ export function QuizResults({
           passed ? "text-success" : "text-destructive"
         }`}
       >
-        {finalScore}%
+        {cumulativeScore}%
       </div>
 
-      <div className="text-xs text-muted-foreground text-center mb-5">{t.score}</div>
+      <div className="text-xs text-muted-foreground text-center mb-1">{t.score}</div>
+      <div className="text-[11px] text-muted-foreground/50 text-center mb-4">
+        {lang === "es"
+          ? `Esta sección: ${finalScore}% · Acumulado: ${cumulativeCorrect}/${cumulativeTotal}`
+          : `This section: ${finalScore}% · Cumulative: ${cumulativeCorrect}/${cumulativeTotal}`}
+      </div>
 
       <div className="text-center text-sm text-muted-foreground mb-1">
         {agentName}
