@@ -1,17 +1,9 @@
-// Supabase Edge Function: grade-answer
-// Replaces the AWS Lambda grading endpoint.
-// Deploy: supabase functions deploy grade-answer
-// Secret:  supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
-
-import Anthropic from "npm:@anthropic-ai/sdk@0.36.3";
-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -34,8 +26,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    const client = new Anthropic({ apiKey });
-
     const prompt = `You are grading a sales certification quiz for LDK DMC (a destination management company).
 
 Question (Section ${section ?? "?"}): ${question}
@@ -53,15 +43,27 @@ Respond in JSON only (no markdown):
   "correct_answer": "Brief ideal answer — only include this field if passed is false"
 }`;
 
-    const message = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 512,
-      messages: [{ role: "user", content: prompt }],
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        messages: [{ role: "user", content: prompt }],
+      }),
     });
 
-    const raw = (message.content[0] as { type: string; text: string }).text.trim();
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Anthropic API error ${res.status}: ${err}`);
+    }
 
-    // Strip markdown code fences if present
+    const envelope = await res.json();
+    const raw = envelope.content[0].text.trim();
     const jsonText = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
     const result = JSON.parse(jsonText);
 
