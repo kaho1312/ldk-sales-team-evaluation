@@ -295,11 +295,16 @@ export default function Index() {
     };
 
     try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
       const res = await fetch(
-        "https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/",
+        `${supabaseUrl}/functions/v1/grade-answer`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${supabaseKey}`,
+          },
           body: JSON.stringify(payload),
         },
       );
