@@ -64,7 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         );
       }
       setLoading(false);
-    });
+    }).catch(() => setLoading(false));
 
     // Reactive session updates
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
