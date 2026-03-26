@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { login } from "@/lib/auth";
+// login() now calls Supabase Auth; navigation is handled after success
 import ldkLogo from "@/assets/logo-ldk.jpeg";
 
 export default function Login() {

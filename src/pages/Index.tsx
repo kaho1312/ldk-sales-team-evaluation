@@ -1,5 +1,5 @@
-import { useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useMemo, useEffect } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import { QuizHeader } from "@/components/QuizHeader";
 import { QuizQuestionView } from "@/components/QuizQuestion";
 import { QuizResults } from "@/components/QuizResults";
@@ -12,33 +12,46 @@ import {
   getByTierAndSection,
   getSectionCounts,
 } from "@/lib/questions";
-
-import { getAgentProgress, saveAnswer, getProgressPercent } from "@/lib/progress";
-import { getCurrentSession, logout } from "@/lib/auth";
+import { saveAnswer, getAgentProgress, getProgressPercent } from "@/lib/progress";
+import { logout } from "@/lib/auth";
+import { useAuth } from "@/context/AuthContext";
+import {
+  startAttempt,
+  saveAnswerToAttempt,
+  completeAttempt,
+  grantCertification,
+  getUserCertifications,
+  getUserProgress,
+  getActiveConfig,
+} from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
 
-// ── localStorage keys ────────────────────────────────────────────────────────
-// Each tier has its own key so multiple certs can be earned independently
+// ── localStorage keys (kept for break/resume and local cache) ─────────────────
 const EARNED_TIER_KEY = (email: string, tier: string) => `ldk_earned_tier_${tier}_${email}`;
 const BREAK_KEY = (email: string) => `ldk_break_${email}`;
 const SHEET_URL_KEY = "ldk_quiz_sheet_url";
-
 const ALL_TIERS = ["Junior", "Mid-Level", "Senior"] as const;
 
-function getEarnedTiers(email: string): Set<string> {
+function getEarnedTiersLocal(email: string): Set<string> {
   const earned = new Set<string>();
   for (const tier of ALL_TIERS) {
     if (localStorage.getItem(EARNED_TIER_KEY(email, tier))) earned.add(tier);
   }
-  // Backward compat: check old single-key format
   const legacy = localStorage.getItem(`ldk_earned_tier_${email}`);
   if (legacy) earned.add(legacy);
   return earned;
 }
 
-function saveEarnedTier(email: string, tier: string) {
+function saveEarnedTierLocal(email: string, tier: string) {
   localStorage.setItem(EARNED_TIER_KEY(email, tier), "1");
+}
+
+// Map Supabase tier strings to display names
+function tierKey(dbTier: string): string {
+  if (dbTier === "junior") return "Junior";
+  if (dbTier === "mid-level") return "Mid-Level";
+  return "Senior";
 }
 
 interface SavedBreak {
@@ -65,7 +78,6 @@ function clearSavedBreak(email: string) {
   localStorage.removeItem(BREAK_KEY(email));
 }
 
-// ── Tier badge component ─────────────────────────────────────────────────────
 function TierBadge({ tier }: { tier: string }) {
   const styles =
     tier === "Junior"
@@ -73,73 +85,140 @@ function TierBadge({ tier }: { tier: string }) {
       : tier === "Mid-Level"
         ? "bg-blue-500/10 text-blue-400 border-blue-500/20"
         : "bg-amber-500/10 text-amber-400 border-amber-500/20";
-  return <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${styles}`}>{tier} Agent</span>;
+  return (
+    <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${styles}`}>
+      {tier} Agent
+    </span>
+  );
 }
 
 export default function Index() {
   const navigate = useNavigate();
-  const session = getCurrentSession()!;
-  const agentKey = session.email; // unique key for progress storage
-  const displayName = `${session.firstName} ${session.lastName}`;
+  const { user } = useAuth();
+
+  // user is always defined here (RequireAuth ensures it)
+  const agentKey = user?.email ?? "";
+  const displayName = user?.fullName ?? "";
 
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
-  const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiers(agentKey));
-  const [justEarned, setJustEarned] = useState<string | null>(null); // tier name just earned, or null
 
-  // Section selection
+  // Certifications — initialized from localStorage cache, refreshed from Supabase
+  const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiersLocal(agentKey));
+  const [justEarned, setJustEarned] = useState<string | null>(null);
+
+  // Section / quiz state
   const [selectedSection, setSelectedSection] = useState<Section>("A");
-
-  // Test mode (3 questions only)
   const [testMode, setTestMode] = useState(false);
-
-  // Grading state
   const [grading, setGrading] = useState(false);
   const [graded, setGraded] = useState(false);
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [feedback, setFeedback] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
-
-  // Session
   const [currentQ, setCurrentQ] = useState(0);
   const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
+
+  // Supabase attempt tracking
+  const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
+  const [quizConfig, setQuizConfig] = useState<{ total_questions: number; passing_threshold: number }>({
+    total_questions: 55,
+    passing_threshold: 0.9,
+  });
+
+  // Supabase progress (async, replaces localStorage progress bar)
+  const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
+
+  // Local progress (fast, shown while Supabase loads)
+  const localAgentProgress = getAgentProgress(agentKey);
+  const localProgressPercent = getProgressPercent(agentKey);
+
+  const progressPercent = progressData
+    ? Math.round((progressData.correct / progressData.total) * 100)
+    : localProgressPercent;
+
+  const certifiedOverall = progressData?.certified ?? localAgentProgress.certified;
 
   // Questions
   const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
   const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem(SHEET_URL_KEY) || "");
   const [showAdmin, setShowAdmin] = useState(false);
-
-  // Saved break
   const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBreak(agentKey));
+
+  // Migration banner
+  const [showMigrationBanner, setShowMigrationBanner] = useState(false);
 
   const t = LANG[lang];
 
-  // Questions for current section (full set)
   const sectionQuestions = useMemo(
     () => getByTierAndSection(allQuestions, "Junior", selectedSection),
     [allQuestions, selectedSection],
   );
-
-  // Active session questions: limited to 3 in test mode
   const sessionQuestions = useMemo(
     () => (testMode ? sectionQuestions.slice(0, 3) : sectionQuestions),
     [sectionQuestions, testMode],
   );
-
   const sectionCounts = useMemo(() => getSectionCounts(allQuestions, "Junior"), [allQuestions]);
-
   const q = sessionQuestions[currentQ];
 
-  const progressPercent = getProgressPercent(agentKey);
-  const agentProgress = getAgentProgress(agentKey);
+  // ── Load Supabase data on mount ──────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+
+    // Load certifications from Supabase and sync to local cache
+    getUserCertifications(user.id).then((certs) => {
+      const fromDb = new Set(certs.map((c) => tierKey(c.certification_tier)));
+      // Merge with local (local may have data not yet in DB during migration window)
+      const merged = new Set([...getEarnedTiersLocal(agentKey), ...fromDb]);
+      setEarnedTiers(merged);
+      // Sync to localStorage
+      for (const tier of fromDb) {
+        saveEarnedTierLocal(agentKey, tier);
+      }
+    });
+
+    // Load progress from Supabase
+    getUserProgress(user.id, "junior").then(setProgressData);
+
+    // Load quiz config
+    getActiveConfig("junior").then((config) => {
+      if (config) {
+        setQuizConfig({
+          total_questions: config.total_questions,
+          passing_threshold: config.passing_threshold,
+        });
+      }
+    });
+
+    // Check for localStorage migration data
+    const hasOldData = Object.keys(localStorage).some(
+      (k) => k.startsWith("ldk_agent_progress"),
+    );
+    if (hasOldData) setShowMigrationBanner(true);
+  }, [user?.id]);
+
+  // Refresh progress after returning to start screen
+  useEffect(() => {
+    if (screen === "start" && user) {
+      getUserProgress(user.id, "junior").then(setProgressData);
+    }
+  }, [screen, user?.id]);
 
   // ── Logout ───────────────────────────────────────────────────────────────
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate("/login");
   };
 
-  // ── Resume from break ──────────────────────────────────────────────────
+  // ── Migration: dismiss or clear old localStorage data ───────────────────
+  const handleDismissMigration = () => {
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith("ldk_agent_progress") || k.startsWith("ldk_users"))
+      .forEach((k) => localStorage.removeItem(k));
+    setShowMigrationBanner(false);
+    toast.success(lang === "es" ? "Datos locales eliminados." : "Local data cleared.");
+  };
+
+  // ── Resume from break ────────────────────────────────────────────────────
   const handleResume = () => {
     if (!savedBreak) return;
     setSelectedSection(savedBreak.section);
@@ -157,7 +236,7 @@ export default function Index() {
     setSavedBreak(null);
   };
 
-  // ── Take a break ──────────────────────────────────────────────────────
+  // ── Take a break ─────────────────────────────────────────────────────────
   const handleBreak = () => {
     const breakData: SavedBreak = {
       agentEmail: agentKey,
@@ -178,13 +257,24 @@ export default function Index() {
     setScreen("start");
   };
 
-  // ── Section selection → start quiz ──────────────────────────────────────
-  const handleSectionStart = (section: Section, isTestMode = false) => {
+  // ── Section selection → start quiz ───────────────────────────────────────
+  const handleSectionStart = async (section: Section, isTestMode = false) => {
     setSelectedSection(section);
     setTestMode(isTestMode);
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
+
+    // Start a Supabase attempt (non-blocking; fall back gracefully)
+    if (user) {
+      try {
+        const attemptId = await startAttempt(user.id, "junior");
+        setCurrentAttemptId(attemptId);
+      } catch {
+        setCurrentAttemptId(null);
+      }
+    }
+
     setScreen("quiz");
   };
 
@@ -196,7 +286,7 @@ export default function Index() {
     setCorrectAnswer("");
   };
 
-  // ── Submit answer to Lambda ──────────────────────────────────────────────
+  // ── Submit answer ─────────────────────────────────────────────────────────
   const handleSubmitAnswer = async (answer: string) => {
     if (!q) return;
     setGrading(true);
@@ -209,11 +299,14 @@ export default function Index() {
     };
 
     try {
-      const res = await fetch("https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const res = await fetch(
+        "https://b5sk52hgpymcgmg3knpgzyjwim0dcpwr.lambda-url.us-east-1.on.aws/",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
 
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
@@ -232,12 +325,28 @@ export default function Index() {
       setGraded(true);
       setGrading(false);
 
+      // Write to localStorage (local progress bar cache)
       saveAnswer(agentKey, q.id, correct);
+
+      // Write to Supabase (authoritative record)
+      if (currentAttemptId) {
+        saveAnswerToAttempt(
+          currentAttemptId,
+          q.id,
+          q.section,
+          answer,
+          correct,
+          personalizedFeedback,
+        ).catch(() => {}); // non-blocking
+      }
+
       setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct }]);
     } catch {
       setIsCorrect(false);
       setFeedback(
-        lang === "es" ? "Error al conectar con el servidor de evaluación." : "Error connecting to grading server.",
+        lang === "es"
+          ? "Error al conectar con el servidor de evaluación."
+          : "Error connecting to grading server.",
       );
       setCorrectAnswer("");
       setGraded(true);
@@ -245,16 +354,37 @@ export default function Index() {
     }
   };
 
-  // ── Next question or finish ──────────────────────────────────────────────
-  const handleNext = () => {
+  // ── Next question or finish ───────────────────────────────────────────────
+  const handleNext = async () => {
     if (currentQ + 1 >= sessionQuestions.length) {
-      // Check cumulative certification across all 55 questions (not just this session)
       const activeTier = "Junior";
-      const latestProgress = getAgentProgress(agentKey);
-      if (latestProgress.certified && !earnedTiers.has(activeTier)) {
-        saveEarnedTier(agentKey, activeTier);
-        setEarnedTiers((prev) => new Set([...prev, activeTier]));
-        setJustEarned(activeTier);
+
+      if (currentAttemptId && user) {
+        try {
+          const result = await completeAttempt(currentAttemptId, quizConfig);
+          if (result.passed && !earnedTiers.has(activeTier)) {
+            await grantCertification(user.id, "junior", currentAttemptId);
+            saveEarnedTierLocal(agentKey, activeTier);
+            setEarnedTiers((prev) => new Set([...prev, activeTier]));
+            setJustEarned(activeTier);
+          }
+        } catch {
+          // Fall back to local check if Supabase fails
+          const latestProgress = getAgentProgress(agentKey);
+          if (latestProgress.certified && !earnedTiers.has(activeTier)) {
+            saveEarnedTierLocal(agentKey, activeTier);
+            setEarnedTiers((prev) => new Set([...prev, activeTier]));
+            setJustEarned(activeTier);
+          }
+        }
+      } else {
+        // No Supabase attempt — use local check
+        const latestProgress = getAgentProgress(agentKey);
+        if (latestProgress.certified && !earnedTiers.has(activeTier)) {
+          saveEarnedTierLocal(agentKey, activeTier);
+          setEarnedTiers((prev) => new Set([...prev, activeTier]));
+          setJustEarned(activeTier);
+        }
       }
 
       clearSavedBreak(agentKey);
@@ -265,16 +395,21 @@ export default function Index() {
     resetGrading();
   };
 
-  // ── Restart ──────────────────────────────────────────────────────────────
+  // ── Restart ───────────────────────────────────────────────────────────────
   const handleRestart = () => {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
     setJustEarned(null);
     setTestMode(false);
+    setCurrentAttemptId(null);
     setSavedBreak(getSavedBreak(agentKey));
     setScreen("start");
   };
+
+  // Supabase progress for the results screen (reload after attempt)
+  const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct.length);
+  const liveTotal = progressData?.total ?? 55;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
@@ -286,15 +421,27 @@ export default function Index() {
           <div className="mb-6">
             <div className="flex items-start justify-between">
               <div>
-                <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">{t.title}</h1>
+                <h1 className="text-2xl sm:text-[27px] font-extrabold text-foreground tracking-tight mb-1.5">
+                  {t.title}
+                </h1>
                 <p className="text-sm text-muted-foreground leading-relaxed">{t.startDesc}</p>
               </div>
-              <button
-                onClick={handleLogout}
-                className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-destructive/60 transition-colors mt-1 shrink-0 ml-4"
-              >
-                {lang === "es" ? "Salir" : "Logout"}
-              </button>
+              <div className="flex items-center gap-3 mt-1 shrink-0 ml-4">
+                {user?.isAdmin && (
+                  <Link
+                    to="/admin"
+                    className="text-[11px] font-bold tracking-wider uppercase text-primary/60 hover:text-primary transition-colors"
+                  >
+                    Admin
+                  </Link>
+                )}
+                <button
+                  onClick={handleLogout}
+                  className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-destructive/60 transition-colors"
+                >
+                  {lang === "es" ? "Salir" : "Logout"}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -329,6 +476,26 @@ export default function Index() {
         {/* ── START SCREEN ── */}
         {screen === "start" && (
           <div>
+            {/* Migration banner */}
+            {showMigrationBanner && (
+              <div className="bg-warning/5 border border-warning/20 rounded-xl p-3.5 mb-4">
+                <div className="text-xs font-bold text-warning mb-1">
+                  {lang === "es" ? "Datos locales detectados" : "Local data detected"}
+                </div>
+                <div className="text-[11px] text-muted-foreground mb-3">
+                  {lang === "es"
+                    ? "Tu historial anterior estaba guardado en este dispositivo. Ahora los datos se guardan en la nube automáticamente."
+                    : "Your previous history was stored on this device. Data is now saved to the cloud automatically."}
+                </div>
+                <button
+                  onClick={handleDismissMigration}
+                  className="text-[11px] font-bold text-warning/80 hover:text-warning transition-colors"
+                >
+                  {lang === "es" ? "Limpiar datos locales" : "Clear local data"}
+                </button>
+              </div>
+            )}
+
             {/* User greeting + certification badges */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
               <div className="flex items-start justify-between gap-2 mb-1">
@@ -338,12 +505,11 @@ export default function Index() {
                   </span>
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     <span className="text-base font-bold text-foreground">{displayName}</span>
-                    {[...earnedTiers].map((t) => <TierBadge key={t} tier={t} />)}
+                    {[...earnedTiers].map((tier) => <TierBadge key={tier} tier={tier} />)}
                   </div>
-                  <div className="text-[11px] text-muted-foreground/50">{session.email}</div>
+                  <div className="text-[11px] text-muted-foreground/50">{agentKey}</div>
                 </div>
               </div>
-              {/* Certification badge placeholders */}
               <div className="mt-2">
                 <span className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground/50">
                   {lang === "es" ? "Certificaciones" : "Certifications"}
@@ -391,15 +557,16 @@ export default function Index() {
               <div className="h-2 bg-secondary rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-500 ${
-                    agentProgress?.certified ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
+                    certifiedOverall ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
                   }`}
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
               <div className="text-[10px] text-muted-foreground/50 mt-1.5">
-                {agentProgress?.correct.length || 0}/55 {lang === "es" ? "correctas" : "correct"}
-                {(agentProgress?.wrong.length || 0) > 0 &&
-                  ` · ${agentProgress?.wrong.length} ${lang === "es" ? "incorrectas" : "wrong"}`}
+                {progressData
+                  ? `${progressData.correct}/${progressData.total}`
+                  : `${localAgentProgress.correct.length}/55`}{" "}
+                {lang === "es" ? "correctas" : "correct"}
               </div>
             </div>
 
@@ -451,7 +618,7 @@ export default function Index() {
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="text-base font-bold text-foreground">{displayName}</span>
-                {[...earnedTiers].map((t) => <TierBadge key={t} tier={t} />)}
+                {[...earnedTiers].map((tier) => <TierBadge key={tier} tier={tier} />)}
               </div>
               <p className="text-sm text-muted-foreground">
                 {lang === "es" ? "Elige una sección para comenzar" : "Choose a section to begin"}
@@ -524,7 +691,7 @@ export default function Index() {
                     className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-xs font-bold py-2 hover:bg-amber-500/20 transition-colors"
                     onClick={() => handleSectionStart(sec, true)}
                   >
-                    {lang === "es" ? `Sec. ${sec}` : `Sec. ${sec}`} · 3
+                    {`Sec. ${sec}`} · 3
                   </button>
                 ))}
               </div>
@@ -544,7 +711,8 @@ export default function Index() {
           <>
             {testMode && (
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5 mb-4 text-[11px] font-bold text-amber-400 uppercase tracking-wider text-center">
-                {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"} · 3 {lang === "es" ? "preguntas" : "questions"}
+                {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"} · 3{" "}
+                {lang === "es" ? "preguntas" : "questions"}
               </div>
             )}
             <QuizQuestionView
@@ -576,8 +744,8 @@ export default function Index() {
             section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
-            cumulativeCorrect={getAgentProgress(agentKey).correct.length}
-            cumulativeTotal={55}
+            cumulativeCorrect={liveCorrect}
+            cumulativeTotal={liveTotal}
             justEarned={!!justEarned}
             onRestart={handleRestart}
           />

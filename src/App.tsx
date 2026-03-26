@@ -6,20 +6,39 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "./pages/Index.tsx";
 import Login from "./pages/Login.tsx";
 import Register from "./pages/Register.tsx";
+import Admin from "./pages/Admin.tsx";
+import AdminAttempt from "./pages/AdminAttempt.tsx";
 import NotFound from "./pages/NotFound.tsx";
-import { getCurrentSession } from "@/lib/auth";
+import { AuthProvider, useAuth } from "@/context/AuthContext";
 
 const queryClient = new QueryClient();
 
+function Loading() {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="text-muted-foreground text-sm">Cargando...</div>
+    </div>
+  );
+}
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const session = getCurrentSession();
-  if (!session) return <Navigate to="/login" replace />;
+  const { user, loading } = useAuth();
+  if (loading) return <Loading />;
+  if (!user) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
+
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <Loading />;
+  if (!user?.isAdmin) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
 function RedirectIfAuthed({ children }: { children: React.ReactNode }) {
-  const session = getCurrentSession();
-  if (session) return <Navigate to="/" replace />;
+  const { user, loading } = useAuth();
+  if (loading) return <Loading />;
+  if (user) return <Navigate to="/" replace />;
   return <>{children}</>;
 }
 
@@ -29,34 +48,31 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
-        <Routes>
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <Index />
-              </RequireAuth>
-            }
-          />
-          <Route
-            path="/login"
-            element={
-              <RedirectIfAuthed>
-                <Login />
-              </RedirectIfAuthed>
-            }
-          />
-          <Route
-            path="/register"
-            element={
-              <RedirectIfAuthed>
-                <Register />
-              </RedirectIfAuthed>
-            }
-          />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+        <AuthProvider>
+          <Routes>
+            <Route
+              path="/"
+              element={<RequireAuth><Index /></RequireAuth>}
+            />
+            <Route
+              path="/admin"
+              element={<RequireAuth><RequireAdmin><Admin /></RequireAdmin></RequireAuth>}
+            />
+            <Route
+              path="/admin/attempt/:id"
+              element={<RequireAuth><RequireAdmin><AdminAttempt /></RequireAdmin></RequireAuth>}
+            />
+            <Route
+              path="/login"
+              element={<RedirectIfAuthed><Login /></RedirectIfAuthed>}
+            />
+            <Route
+              path="/register"
+              element={<RedirectIfAuthed><Register /></RedirectIfAuthed>}
+            />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </AuthProvider>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
