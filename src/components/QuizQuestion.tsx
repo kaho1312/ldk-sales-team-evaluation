@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { QuizQuestion as QuizQuestionType } from "@/lib/questions";
 import { LANG, Lang } from "@/lib/i18n";
+
+const SPINNER_FRAMES = ["|", "/", "-", "\\"];
 
 interface QuizQuestionProps {
   question: QuizQuestionType;
@@ -38,6 +40,13 @@ export function QuizQuestionView({
   const t = LANG[lang];
   const progress = ((currentIndex + (graded ? 1 : 0)) / totalQuestions) * 100;
   const [answer, setAnswer] = useState("");
+  const [spinFrame, setSpinFrame] = useState(0);
+
+  useEffect(() => {
+    if (!grading) return;
+    const id = setInterval(() => setSpinFrame((f) => (f + 1) % SPINNER_FRAMES.length), 120);
+    return () => clearInterval(id);
+  }, [grading]);
 
   const handleSubmit = () => {
     if (!answer.trim() || grading || graded) return;
@@ -81,7 +90,9 @@ export function QuizQuestionView({
           >
             {grading ? (
               <span className="flex items-center justify-center gap-2">
-                <span className="w-4 h-4 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
+                <span className="font-mono text-base w-4 text-center select-none leading-none">
+                  {SPINNER_FRAMES[spinFrame]}
+                </span>
                 {t.loadingCoach}
               </span>
             ) : lang === "es" ? (

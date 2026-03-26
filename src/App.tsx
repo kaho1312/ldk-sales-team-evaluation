@@ -10,13 +10,28 @@ import Admin from "./pages/Admin.tsx";
 import AdminAttempt from "./pages/AdminAttempt.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { useEffect, useState } from "react";
 
 const queryClient = new QueryClient();
 
+const SPINNER_FRAMES = ["|", "/", "-", "\\"];
+
 function Loading() {
+  const [frame, setFrame] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 120);
+    return () => clearInterval(id);
+  }, []);
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center">
-      <div className="text-muted-foreground text-sm">Cargando...</div>
+      <div className="flex flex-col items-center gap-3">
+        <span className="text-primary text-2xl font-mono w-6 text-center select-none">
+          {SPINNER_FRAMES[frame]}
+        </span>
+        <span className="text-muted-foreground text-sm tracking-wide">Cargando...</span>
+      </div>
     </div>
   );
 }
