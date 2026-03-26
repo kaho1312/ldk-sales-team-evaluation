@@ -295,23 +295,47 @@ export default function Index() {
     };
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      const res = await fetch(
-        `${supabaseUrl}/functions/v1/grade-answer`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseKey}`,
-          },
-          body: JSON.stringify(payload),
+      const apiKey = import.meta.env.VITE_ANTHROPIC_API_KEY as string;
+      if (!apiKey) throw new Error("VITE_ANTHROPIC_API_KEY not set");
+
+      const prompt = `You are grading a sales certification quiz for LDK DMC (a destination management company).
+
+Question (Section ${payload.section ?? "?"}): ${payload.question}
+
+Model Answer: ${payload.modelAnswer}
+
+Agent's Answer: ${payload.answer}
+
+Evaluate whether the agent's answer demonstrates sufficient understanding of the key concepts in the model answer. Be lenient with phrasing and synonyms — what matters is conceptual correctness. Minor omissions are acceptable; major gaps are not.
+
+Respond in JSON only (no markdown):
+{
+  "passed": true or false,
+  "feedback": "2-3 sentence coaching comment in the same language as the question. Address the agent directly (use 'Tu respuesta...' for Spanish or 'Your answer...' for English). Be encouraging but specific.",
+  "correct_answer": "Brief ideal answer — only include this field if passed is false"
+}`;
+
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-allow-browser": "true",
         },
-      );
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 512,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
 
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
 
-      const data = await res.json();
+      const envelope = await res.json();
+      const raw = envelope.content[0].text.trim();
+      const jsonText = raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+      const data = JSON.parse(jsonText);
       const correct = !!data.passed;
 
       setIsCorrect(correct);
