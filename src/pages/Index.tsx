@@ -258,24 +258,20 @@ export default function Index() {
   };
 
   // ── Section selection → start quiz ───────────────────────────────────────
-  const handleSectionStart = async (section: Section, isTestMode = false) => {
+  const handleSectionStart = (section: Section, isTestMode = false) => {
     setSelectedSection(section);
     setTestMode(isTestMode);
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
+    setScreen("quiz"); // switch immediately — don't wait for Supabase
 
-    // Start a Supabase attempt (non-blocking; fall back gracefully)
+    // Start a Supabase attempt in the background (non-blocking)
     if (user) {
-      try {
-        const attemptId = await startAttempt(user.id, "junior");
-        setCurrentAttemptId(attemptId);
-      } catch {
-        setCurrentAttemptId(null);
-      }
+      startAttempt(user.id, "junior")
+        .then((attemptId) => setCurrentAttemptId(attemptId))
+        .catch(() => setCurrentAttemptId(null));
     }
-
-    setScreen("quiz");
   };
 
   const resetGrading = () => {
