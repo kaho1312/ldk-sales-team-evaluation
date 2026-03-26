@@ -26,24 +26,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function loadUser(id: string, email: string, meta: Record<string, string>) {
-    const { data: profile } = await supabase
-      .from("users")
-      .select("is_admin, full_name")
-      .eq("id", id)
-      .maybeSingle();
-
-    const fullName: string = profile?.full_name || meta?.full_name || email;
+  function buildUser(id: string, email: string, meta: Record<string, string>, isAdmin: boolean): AuthUser {
+    const fullName: string = meta?.full_name || email;
     const parts = fullName.split(" ");
-
-    setUser({
+    return {
       id,
       email,
       firstName: meta?.first_name || parts[0] || "",
       lastName: meta?.last_name || parts.slice(1).join(" ") || "",
       fullName,
-      isAdmin: profile?.is_admin ?? false,
-    });
+      isAdmin,
+    };
+  }
+
+  async function loadUser(id: string, email: string, meta: Record<string, string>) {
+    // Set user immediately with auth metadata so the app never hangs
+    setUser(buildUser(id, email, meta, false));
+
+    // Then enrich with DB profile (is_admin, full_name) in the background
+    try {
+      const { data: profile } = await supabase
+        .from("users")
+        .select("is_admin, full_name")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (profile) {
+        const enrichedMeta = { ...meta, full_name: profile.full_name || meta?.full_name || email };
+        setUser(buildUser(id, email, enrichedMeta, profile.is_admin ?? false));
+      }
+    } catch {
+      // Profile fetch failed — user already set with basic info above, that's fine
+    }
   }
 
   async function refresh() {
@@ -54,7 +68,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    // Initial session load
+    // Hard timeout: never stay in loading state more than 4 seconds
+    const timeout = setTimeout(() => setLoading(false), 4000);
+
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       if (session?.user) {
         await loadUser(
@@ -63,10 +79,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           (session.user.user_metadata ?? {}) as Record<string, string>,
         );
       }
+      clearTimeout(timeout);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      clearTimeout(timeout);
+      setLoading(false);
+    });
 
-    // Reactive session updates
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (session?.user) {
@@ -81,7 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
     );
 
-    return () => subscription.unsubscribe();
+    return () => {
+      clearTimeout(timeout);
+      subscription.unsubscribe();
+    };
   }, []);
 
   return (
