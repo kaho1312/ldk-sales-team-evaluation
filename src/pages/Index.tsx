@@ -23,6 +23,7 @@ import {
   getUserCertifications,
   getUserProgress,
   getActiveConfig,
+  getCompletedSections,
 } from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -116,10 +117,11 @@ export default function Index() {
   const [feedback, setFeedback] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
   const [currentQ, setCurrentQ] = useState(0);
-  const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean }[]>([]);
+  const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[]>([]);
 
   // Supabase attempt tracking
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
+  const [completedSections, setCompletedSections] = useState<Set<string>>(new Set());
   const [quizConfig, setQuizConfig] = useState<{ total_questions: number; passing_threshold: number }>({
     total_questions: 55,
     passing_threshold: 0.9,
@@ -179,6 +181,9 @@ export default function Index() {
     // Load progress from Supabase
     getUserProgress(user.id, "junior").then(setProgressData);
 
+    // Load completed sections
+    getCompletedSections(user.id, "junior").then(setCompletedSections);
+
     // Load quiz config
     getActiveConfig("junior").then((config) => {
       if (config) {
@@ -196,10 +201,11 @@ export default function Index() {
     if (hasOldData) setShowMigrationBanner(true);
   }, [user?.id]);
 
-  // Refresh progress after returning to start screen
+  // Refresh progress and completed sections after returning to start screen
   useEffect(() => {
     if (screen === "start" && user) {
       getUserProgress(user.id, "junior").then(setProgressData);
+      getCompletedSections(user.id, "junior").then(setCompletedSections);
     }
   }, [screen, user?.id]);
 
@@ -338,17 +344,18 @@ export default function Index() {
         ).catch(() => {}); // non-blocking
       }
 
-      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct }]);
+      const storedCorrectAnswer = !correct && data.correct_answer ? data.correct_answer : "";
+      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct, feedback: personalizedFeedback, correctAnswer: storedCorrectAnswer }]);
     } catch {
       setIsCorrect(false);
-      setFeedback(
-        lang === "es"
-          ? "Error al conectar con el servidor de evaluación."
-          : "Error connecting to grading server.",
-      );
+      const errorFeedback = lang === "es"
+        ? "Error al conectar con el servidor de evaluación."
+        : "Error connecting to grading server.";
+      setFeedback(errorFeedback);
       setCorrectAnswer("");
       setGraded(true);
       setGrading(false);
+      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: false, feedback: errorFeedback, correctAnswer: "" }]);
     }
   };
 
@@ -544,27 +551,38 @@ export default function Index() {
               </div>
             )}
 
-            {/* Progress bar */}
+            {/* Progress block */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
-              <div className="flex justify-between items-center mb-2">
+              <div className="flex justify-between items-center mb-2.5">
                 <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
                   {lang === "es" ? "Tu progreso" : "Your Progress"}
                 </span>
-                <span className="text-xs font-bold text-primary tabular-nums">{progressPercent}%</span>
+                <span className="text-[11px] font-bold text-primary tabular-nums">
+                  {completedSections.size}/3 {lang === "es" ? "secciones" : "sections"}
+                </span>
               </div>
-              <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    certifiedOverall ? "bg-success" : "bg-gradient-to-r from-primary/60 to-primary"
-                  }`}
-                  style={{ width: `${progressPercent}%` }}
-                />
+              <div className="flex gap-2 mb-2.5">
+                {(["A", "B", "C"] as const).map((sec) => {
+                  const done = completedSections.has(sec);
+                  return (
+                    <div
+                      key={sec}
+                      className={`flex-1 rounded-lg py-1.5 text-center text-[11px] font-bold border transition-all ${
+                        done
+                          ? "bg-success/10 border-success/30 text-success"
+                          : "bg-secondary/40 border-border/50 text-muted-foreground/50"
+                      }`}
+                    >
+                      {done ? `✓ ${lang === "es" ? "Sec" : "Sec"}. ${sec}` : `Sec. ${sec}`}
+                    </div>
+                  );
+                })}
               </div>
-              <div className="text-[10px] text-muted-foreground/50 mt-1.5">
+              <div className="text-[10px] text-muted-foreground/50">
                 {progressData
                   ? `${progressData.correct}/${progressData.total}`
                   : `${localAgentProgress.correct.length}/55`}{" "}
-                {lang === "es" ? "correctas" : "correct"}
+                {lang === "es" ? "respuestas correctas acumuladas" : "cumulative correct answers"}
               </div>
             </div>
 
@@ -641,21 +659,30 @@ export default function Index() {
                   All: { title: "All", desc: "" },
                 };
                 const count = sec === "A" ? sectionCounts.A : sec === "B" ? sectionCounts.B : sectionCounts.C;
+                const isDone = completedSections.has(sec);
                 return (
                   <button
                     key={sec}
-                    className="w-full bg-secondary/40 border border-border hover:border-primary/40 hover:bg-primary/5 rounded-xl p-4 text-left transition-all group"
+                    className={`w-full rounded-xl p-4 text-left transition-all group border ${
+                      isDone
+                        ? "bg-success/5 border-success/30 hover:border-success/50 hover:bg-success/10"
+                        : "bg-secondary/40 border-border hover:border-primary/40 hover:bg-primary/5"
+                    }`}
                     onClick={() => handleSectionStart(sec, false)}
                   >
                     <div className="flex items-center justify-between">
                       <div>
-                        <div className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">
-                          {labels[sec].title}
+                        <div className={`font-bold text-sm transition-colors ${isDone ? "text-success group-hover:text-success" : "text-foreground group-hover:text-primary"}`}>
+                          {isDone && "✓ "}{labels[sec].title}
                         </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">{labels[sec].desc}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {isDone
+                            ? (lang === "es" ? "Completada · Puedes repetirla" : "Completed · Can retake")
+                            : labels[sec].desc}
+                        </div>
                       </div>
                       <div className="text-right">
-                        <div className="text-lg font-extrabold text-primary/60 group-hover:text-primary transition-colors">
+                        <div className={`text-lg font-extrabold transition-colors ${isDone ? "text-success/60 group-hover:text-success" : "text-primary/60 group-hover:text-primary"}`}>
                           {count}
                         </div>
                         <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
