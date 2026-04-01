@@ -267,6 +267,54 @@ export async function updateQuizConfig(
   if (error) throw error;
 }
 
+// ── Leaderboard ───────────────────────────────────────────────────────────────
+
+export interface LeaderboardEntry {
+  id: string;
+  full_name: string;
+  correct: number;
+  total: number;
+  certified: boolean;
+}
+
+export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
+  const [usersResult, answersResult, certsResult, configResult] = await Promise.all([
+    supabase.from("users").select("id, full_name").order("full_name"),
+    supabase
+      .from("answers")
+      .select("question_id, final_grade, quiz_attempts!inner(user_id, certification_tier)")
+      .eq("quiz_attempts.certification_tier", "junior")
+      .eq("final_grade", true),
+    supabase
+      .from("certifications")
+      .select("user_id")
+      .eq("certification_tier", "junior"),
+    supabase.from("quiz_configs").select("total_questions").eq("certification_tier", "junior").single(),
+  ]);
+
+  const total = configResult.data?.total_questions ?? 55;
+  const certifiedIds = new Set((certsResult.data ?? []).map((c: { user_id: string }) => c.user_id));
+
+  // Group correct answers by user_id, deduplicated by question_id
+  const correctByUser = new Map<string, Set<string>>();
+  for (const row of answersResult.data ?? []) {
+    const userId = (row as any).quiz_attempts?.user_id;
+    if (!userId) continue;
+    if (!correctByUser.has(userId)) correctByUser.set(userId, new Set());
+    correctByUser.get(userId)!.add(row.question_id);
+  }
+
+  return ((usersResult.data ?? []) as { id: string; full_name: string }[])
+    .map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      correct: correctByUser.get(u.id)?.size ?? 0,
+      total,
+      certified: certifiedIds.has(u.id),
+    }))
+    .sort((a, b) => b.correct - a.correct);
+}
+
 // ── Completed sections ────────────────────────────────────────────────────────
 
 export async function getCompletedSections(userId: string, tier: string): Promise<Set<string>> {

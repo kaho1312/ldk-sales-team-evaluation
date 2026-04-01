@@ -31,7 +31,6 @@ import { toast } from "sonner";
 // ── localStorage keys (kept for break/resume and local cache) ─────────────────
 const EARNED_TIER_KEY = (email: string, tier: string) => `ldk_earned_tier_${tier}_${email}`;
 const BREAK_KEY = (email: string) => `ldk_break_${email}`;
-const SHEET_URL_KEY = "ldk_quiz_sheet_url";
 const ALL_TIERS = ["Junior", "Mid-Level", "Senior"] as const;
 
 function getEarnedTiersLocal(email: string): Set<string> {
@@ -142,9 +141,7 @@ export default function Index() {
 
   // Questions
   const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
-  const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem(SHEET_URL_KEY) || "");
-  const [showAdmin, setShowAdmin] = useState(false);
-  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBreak(agentKey));
+const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBreak(agentKey));
 
   // Migration banner
   const [showMigrationBanner, setShowMigrationBanner] = useState(false);
@@ -212,7 +209,7 @@ export default function Index() {
   // ── Logout ───────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     await logout();
-    navigate("/login");
+    // No navigate() — onAuthStateChange sets user=null, RequireAuth redirects to /login
   };
 
   // ── Migration: dismiss or clear old localStorage data ───────────────────
@@ -435,7 +432,7 @@ export default function Index() {
                 {user?.isAdmin && (
                   <Link
                     to="/admin"
-                    className="text-[11px] font-bold tracking-wider uppercase text-primary/60 hover:text-primary transition-colors"
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-primary/10 border border-primary/20 text-primary hover:bg-primary/20 transition-colors"
                   >
                     Admin
                   </Link>
@@ -586,38 +583,7 @@ export default function Index() {
               </div>
             </div>
 
-            {/* Admin panel */}
-            <div className="mb-6">
-              <button
-                className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
-                onClick={() => setShowAdmin(!showAdmin)}
-              >
-                {t.adminAccess} {showAdmin ? "▾" : "▸"}
-              </button>
-              {showAdmin && (
-                <div className="mt-3 bg-secondary/30 border border-border/50 rounded-xl p-4">
-                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2 block">
-                    {t.sheetUrlLabel}
-                  </span>
-                  <div className="flex gap-2">
-                    <input
-                      className="flex-1 bg-secondary/50 border border-border rounded-lg text-foreground text-xs py-2 px-3 outline-none focus:border-primary/40 placeholder:text-muted-foreground/30 transition-colors"
-                      placeholder={t.sheetUrlPlaceholder}
-                      value={sheetUrl}
-                      onChange={(e) => setSheetUrl(e.target.value)}
-                    />
-                    <button
-                      className="bg-primary/15 border border-primary/30 rounded-lg text-primary text-xs font-bold px-3 hover:bg-primary/25 transition-colors disabled:opacity-30"
-                      disabled={!sheetUrl.trim()}
-                    >
-                      {t.loadQuestions}
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="text-xs text-muted-foreground/40 text-center mb-3.5">{t.passThreshold}</div>
+<div className="text-xs text-muted-foreground/40 text-center mb-3.5">{t.passThreshold}</div>
 
             <button
               className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all"
