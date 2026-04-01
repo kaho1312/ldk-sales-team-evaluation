@@ -278,41 +278,41 @@ export interface LeaderboardEntry {
 }
 
 export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
-  const [usersResult, answersResult, certsResult, configResult] = await Promise.all([
-    supabase.from("users").select("id, full_name").order("full_name"),
-    supabase
-      .from("answers")
-      .select("question_id, final_grade, quiz_attempts!inner(user_id, certification_tier)")
-      .eq("quiz_attempts.certification_tier", "junior")
-      .eq("final_grade", true),
-    supabase
-      .from("certifications")
-      .select("user_id")
-      .eq("certification_tier", "junior"),
-    supabase.from("quiz_configs").select("total_questions").eq("certification_tier", "junior").single(),
-  ]);
+  try {
+    const [usersResult, attemptsResult, certsResult] = await Promise.all([
+      supabase.from("users").select("id, full_name"),
+      supabase
+        .from("quiz_attempts")
+        .select("user_id, total_correct")
+        .eq("certification_tier", "junior")
+        .not("total_correct", "is", null),
+      supabase
+        .from("certifications")
+        .select("user_id")
+        .eq("certification_tier", "junior"),
+    ]);
 
-  const total = configResult.data?.total_questions ?? 55;
-  const certifiedIds = new Set((certsResult.data ?? []).map((c: { user_id: string }) => c.user_id));
+    const certifiedIds = new Set((certsResult.data ?? []).map((c: { user_id: string }) => c.user_id));
 
-  // Group correct answers by user_id, deduplicated by question_id
-  const correctByUser = new Map<string, Set<string>>();
-  for (const row of answersResult.data ?? []) {
-    const userId = (row as any).quiz_attempts?.user_id;
-    if (!userId) continue;
-    if (!correctByUser.has(userId)) correctByUser.set(userId, new Set());
-    correctByUser.get(userId)!.add(row.question_id);
+    // Best total_correct across all attempts per user
+    const bestByUser = new Map<string, number>();
+    for (const a of (attemptsResult.data ?? []) as { user_id: string; total_correct: number | null }[]) {
+      const current = bestByUser.get(a.user_id) ?? 0;
+      if ((a.total_correct ?? 0) > current) bestByUser.set(a.user_id, a.total_correct ?? 0);
+    }
+
+    return ((usersResult.data ?? []) as { id: string; full_name: string }[])
+      .map((u) => ({
+        id: u.id,
+        full_name: u.full_name,
+        correct: bestByUser.get(u.id) ?? 0,
+        total: 55,
+        certified: certifiedIds.has(u.id),
+      }))
+      .sort((a, b) => b.correct - a.correct);
+  } catch {
+    return [];
   }
-
-  return ((usersResult.data ?? []) as { id: string; full_name: string }[])
-    .map((u) => ({
-      id: u.id,
-      full_name: u.full_name,
-      correct: correctByUser.get(u.id)?.size ?? 0,
-      total,
-      certified: certifiedIds.has(u.id),
-    }))
-    .sort((a, b) => b.correct - a.correct);
 }
 
 // ── Completed sections ────────────────────────────────────────────────────────
