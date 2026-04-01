@@ -209,7 +209,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
   // ── Logout ───────────────────────────────────────────────────────────────
   const handleLogout = async () => {
     await logout();
-    // No navigate() — onAuthStateChange sets user=null, RequireAuth redirects to /login
+    window.location.replace("/login");
   };
 
   // ── Migration: dismiss or clear old localStorage data ───────────────────

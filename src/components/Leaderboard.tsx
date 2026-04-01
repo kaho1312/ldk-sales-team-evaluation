@@ -39,16 +39,26 @@ export function Leaderboard({ lang }: LeaderboardProps) {
   const lb = LABELS[lang];
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     getLeaderboardData()
       .then(setEntries)
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);
 
   if (loading) {
     return (
       <div className="text-center text-sm text-muted-foreground py-8">{lb.loading}</div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="text-center text-sm text-muted-foreground py-8">
+        {lang === "es" ? "No se pudo cargar la clasificación." : "Could not load leaderboard."}
+      </div>
     );
   }
 
