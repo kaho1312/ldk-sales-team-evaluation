@@ -267,12 +267,74 @@ export async function updateQuizConfig(
   if (error) throw error;
 }
 
+// ── Leaderboard ───────────────────────────────────────────────────────────────
+
+export interface LeaderboardEntry {
+  id: string;
+  full_name: string;
+  correct: number;
+  total: number;
+  certified: boolean;
+}
+
+export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
+  const [usersResult, answersResult, certsResult, configResult] = await Promise.all([
+    supabase.from("users").select("id, full_name").order("full_name"),
+    supabase
+      .from("answers")
+      .select("question_id, final_grade, quiz_attempts!inner(user_id, certification_tier)")
+      .eq("quiz_attempts.certification_tier", "junior")
+      .eq("final_grade", true),
+    supabase
+      .from("certifications")
+      .select("user_id")
+      .eq("certification_tier", "junior"),
+    supabase.from("quiz_configs").select("total_questions").eq("certification_tier", "junior").single(),
+  ]);
+
+  const total = configResult.data?.total_questions ?? 55;
+  const certifiedIds = new Set((certsResult.data ?? []).map((c: { user_id: string }) => c.user_id));
+
+  // Group correct answers by user_id, deduplicated by question_id
+  const correctByUser = new Map<string, Set<string>>();
+  for (const row of answersResult.data ?? []) {
+    const userId = (row as any).quiz_attempts?.user_id;
+    if (!userId) continue;
+    if (!correctByUser.has(userId)) correctByUser.set(userId, new Set());
+    correctByUser.get(userId)!.add(row.question_id);
+  }
+
+  return ((usersResult.data ?? []) as { id: string; full_name: string }[])
+    .map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      correct: correctByUser.get(u.id)?.size ?? 0,
+      total,
+      certified: certifiedIds.has(u.id),
+    }))
+    .sort((a, b) => b.correct - a.correct);
+}
+
+// ── Completed sections ────────────────────────────────────────────────────────
+
+export async function getCompletedSections(userId: string, tier: string): Promise<Set<string>> {
+  const { data } = await supabase
+    .from("answers")
+    .select("section, quiz_attempts!inner(user_id, certification_tier, status)")
+    .eq("quiz_attempts.user_id", userId)
+    .eq("quiz_attempts.certification_tier", tier)
+    .neq("quiz_attempts.status", "in_progress");
+  const sections = new Set((data ?? []).map((a: { section: string }) => a.section));
+  return sections;
+}
+
 // ── Admin — user list ─────────────────────────────────────────────────────────
 
 export interface AdminUserRow {
   id: string;
   email: string;
   full_name: string;
+  is_admin: boolean;
   created_at: string;
   last_login: string | null;
   certifications: { certification_tier: string; granted_at: string }[];
@@ -283,7 +345,7 @@ export async function adminGetAllUsers(): Promise<AdminUserRow[]> {
   const { data, error } = await supabase
     .from("users")
     .select(`
-      id, email, full_name, created_at, last_login,
+      id, email, full_name, is_admin, created_at, last_login,
       certifications(certification_tier, granted_at),
       quiz_attempts(id, certification_tier, attempt_number, status, score_percent,
                     total_correct, total_questions, section_errors,
@@ -297,6 +359,7 @@ export async function adminGetAllUsers(): Promise<AdminUserRow[]> {
     id: u.id,
     email: u.email,
     full_name: u.full_name,
+    is_admin: u.is_admin ?? false,
     created_at: u.created_at,
     last_login: u.last_login,
     certifications: u.certifications ?? [],
@@ -305,6 +368,11 @@ export async function adminGetAllUsers(): Promise<AdminUserRow[]> {
         new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
     ),
   }));
+}
+
+export async function adminSetUserAdmin(userId: string, isAdmin: boolean): Promise<void> {
+  const { error } = await supabase.from("users").update({ is_admin: isAdmin }).eq("id", userId);
+  if (error) throw error;
 }
 
 // ── Admin — attempt detail with all answers ───────────────────────────────────

@@ -1,9 +1,12 @@
+import { useState } from "react";
 import { LANG, Lang } from "@/lib/i18n";
 
 interface QuizResult {
   id: string;
   question: string;
   isCorrect: boolean;
+  feedback: string;
+  correctAnswer: string;
 }
 
 interface QuizResultsProps {
@@ -17,6 +20,45 @@ interface QuizResultsProps {
   cumulativeTotal: number;
   justEarned: boolean;
   onRestart: () => void;
+}
+
+function AnswerReviewCard({ result, lang }: { result: QuizResult; lang: Lang }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-destructive/5 border border-destructive/10 rounded-lg mb-2 overflow-hidden">
+      <button
+        className="w-full text-left py-2.5 px-3 flex items-start justify-between gap-2"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="text-sm text-muted-foreground leading-snug">
+          {result.id} · {result.question.length > 68 ? result.question.slice(0, 68) + "…" : result.question}
+        </span>
+        <span className="text-[11px] text-muted-foreground/50 shrink-0 mt-0.5">{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <div className="border-t border-destructive/10 px-3 py-2.5 space-y-2">
+          {result.feedback && (
+            <div>
+              <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
+                {lang === "es" ? "Retroalimentación IA" : "AI Feedback"}
+              </div>
+              <div className="text-xs text-muted-foreground leading-relaxed">{result.feedback}</div>
+            </div>
+          )}
+          {result.correctAnswer && (
+            <div>
+              <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
+                {lang === "es" ? "Respuesta correcta" : "Correct Answer"}
+              </div>
+              <div className="text-xs text-foreground/80 bg-success/5 border border-success/15 rounded-lg px-2.5 py-2 leading-relaxed">
+                {result.correctAnswer}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function QuizResults({
@@ -132,7 +174,14 @@ export function QuizResults({
         </div>
       </div>
 
-      {/* Wrong questions list */}
+      {/* Section completed banner */}
+      <div className="bg-success/8 border border-success/25 rounded-xl py-2.5 px-4 text-center mb-5">
+        <span className="text-xs font-bold text-success">
+          ✓ {sectionLabel} {lang === "es" ? "completada" : "completed"}
+        </span>
+      </div>
+
+      {/* Wrong questions list with feedback */}
       {wrongCount > 0 && (
         <div className="mb-5">
           <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2">
@@ -141,12 +190,7 @@ export function QuizResults({
           {results
             .filter((r) => !r.isCorrect)
             .map((r) => (
-              <div
-                key={r.id}
-                className="bg-destructive/5 border border-destructive/10 rounded-lg py-2.5 px-3 text-sm text-muted-foreground leading-snug mb-1.5"
-              >
-                {r.id} · {r.question.length > 68 ? r.question.slice(0, 68) + "…" : r.question}
-              </div>
+              <AnswerReviewCard key={r.id} result={r} lang={lang} />
             ))}
         </div>
       )}

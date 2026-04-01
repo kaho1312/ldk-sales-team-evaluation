@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   adminGetAllUsers,
   adminGetAllAttempts,
+  adminSetUserAdmin,
   getQuizConfigs,
   updateQuizConfig,
   exportAttemptsToCSV,
@@ -60,6 +61,22 @@ function AgentesTab() {
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
+
+  const handleToggleAdmin = async (userId: string, currentIsAdmin: boolean) => {
+    setTogglingAdmin(userId);
+    try {
+      await adminSetUserAdmin(userId, !currentIsAdmin);
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, is_admin: !currentIsAdmin } : u)),
+      );
+      toast.success(!currentIsAdmin ? "Acceso admin otorgado" : "Acceso admin removido");
+    } catch {
+      toast.error("Error al cambiar acceso admin");
+    } finally {
+      setTogglingAdmin(null);
+    }
+  };
 
   useEffect(() => {
     adminGetAllUsers()
@@ -123,7 +140,14 @@ function AgentesTab() {
               <div className="md:grid grid-cols-[2fr_2fr_2fr_2fr_1fr_1fr] gap-3 items-center flex flex-col md:flex-row">
                 {/* Nombre */}
                 <div>
-                  <div className="font-semibold text-sm text-foreground leading-tight">{user.full_name}</div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="font-semibold text-sm text-foreground leading-tight">{user.full_name}</div>
+                    {user.is_admin && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-primary">
+                        Admin
+                      </span>
+                    )}
+                  </div>
                   <div className="text-[11px] text-muted-foreground md:hidden">{user.email}</div>
                 </div>
                 {/* Correo */}
@@ -155,7 +179,7 @@ function AgentesTab() {
               </div>
             </button>
 
-            {/* Expanded: attempt list */}
+            {/* Expanded: attempt list + admin toggle */}
             {isOpen && (
               <div className="border-t border-border/50 bg-secondary/10 px-4 py-3 space-y-2">
                 {user.attempts.length === 0 ? (
@@ -201,6 +225,27 @@ function AgentesTab() {
                     ))}
                   </>
                 )}
+                {/* Admin access toggle */}
+                <div className="pt-2 border-t border-border/30 flex items-center gap-3">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
+                    Acceso Admin:
+                  </span>
+                  <button
+                    className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-50 ${
+                      user.is_admin
+                        ? "bg-destructive/10 border-destructive/20 text-destructive hover:bg-destructive/20"
+                        : "bg-primary/10 border-primary/20 text-primary hover:bg-primary/20"
+                    }`}
+                    disabled={togglingAdmin === user.id}
+                    onClick={(e) => { e.stopPropagation(); handleToggleAdmin(user.id, user.is_admin); }}
+                  >
+                    {togglingAdmin === user.id
+                      ? "..."
+                      : user.is_admin
+                        ? "Quitar acceso admin"
+                        : "Dar acceso admin"}
+                  </button>
+                </div>
               </div>
             )}
           </div>
