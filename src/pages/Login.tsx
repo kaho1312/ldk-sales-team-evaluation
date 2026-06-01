@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { login } from "@/lib/auth";
-// login() now calls Supabase Auth; navigation is handled after success
+import { useAuth } from "@/context/AuthContext";
 import ldkLogo from "@/assets/logo-ldk.jpeg";
 
 export default function Login() {
   const navigate = useNavigate();
+  const { refresh } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -16,10 +17,11 @@ export default function Login() {
     setError("");
     setLoading(true);
     const result = await login(email, password);
-    setLoading(false);
     if (result.success) {
+      await refresh();
       navigate("/");
     } else {
+      setLoading(false);
       setError(result.error || "Error al iniciar sesión");
     }
   };

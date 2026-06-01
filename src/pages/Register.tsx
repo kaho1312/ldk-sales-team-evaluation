@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { register } from "@/lib/auth";
+import { useAuth } from "@/context/AuthContext";
 import ldkLogo from "@/assets/logo-ldk.jpeg";
 
 export default function Register() {
   const navigate = useNavigate();
+  const { refresh } = useAuth();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -17,10 +19,11 @@ export default function Register() {
     setError("");
     setLoading(true);
     const result = await register(firstName, lastName, email, password);
-    setLoading(false);
     if (result.success) {
+      await refresh();
       navigate("/");
     } else {
+      setLoading(false);
       setError(result.error || "Error al crear la cuenta");
     }
   };
