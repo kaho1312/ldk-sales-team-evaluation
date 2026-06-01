@@ -1,9 +1,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// LDK Sales Certification — Supabase API Layer
+// LDK Sales Certification — AWS API Layer (migration target)
 // All persistent data operations go through this module.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { supabase } from "./supabase";
 import { calculateScore } from "./scoring";
 import type { ScoreResult } from "./scoring";
 
@@ -65,55 +64,81 @@ export interface Certification {
   granted_by: string;
 }
 
-// ── Current user ──────────────────────────────────────────────────────────────
+import { getStoredToken } from "./auth";
+
+const apiBaseUrl = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+
+function getApiUrl(path: string, query?: Record<string, string | number | boolean>): string {
+  if (!apiBaseUrl) {
+    throw new Error("VITE_API_URL is not configured.");
+  }
+
+  const base = apiBaseUrl.replace(/\/+$/g, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${base}${normalizedPath}`;
+
+  if (!query) return url;
+
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    params.set(key, String(value));
+  }
+
+  return `${url}?${params.toString()}`;
+}
+
+async function apiFetch<T>(
+  path: string,
+  options?: {
+    method?: string;
+    body?: unknown;
+    query?: Record<string, string | number | boolean>;
+  },
+): Promise<T> {
+  const url = getApiUrl(path, options?.query);
+  const token = getStoredToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    method: options?.method ?? "GET",
+    headers,
+    body: options?.body ? JSON.stringify(options.body) : undefined,
+  });
+
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!response.ok) {
+    const error = data?.message || response.statusText || "Request failed";
+    throw new Error(error);
+  }
+
+  return data as T;
+}
 
 export async function getCurrentUser(): Promise<UserProfile | null> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-  const { data } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-  return (data as UserProfile) ?? null;
+  return apiFetch<UserProfile | null>("/me");
 }
 
 // ── Quiz attempt lifecycle ────────────────────────────────────────────────────
 
 export async function startAttempt(userId: string, tier: string): Promise<string> {
-  // Count prior attempts for this user+tier to derive attempt_number
-  const { count } = await supabase
-    .from("quiz_attempts")
-    .select("*", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .eq("certification_tier", tier);
-
-  const { data, error } = await supabase
-    .from("quiz_attempts")
-    .insert({
-      user_id: userId,
-      certification_tier: tier,
-      attempt_number: (count ?? 0) + 1,
-      status: "in_progress",
-    })
-    .select("id")
-    .single();
-
-  if (error) throw error;
-  return data.id as string;
+  const data = await apiFetch<{ id: string }>("/attempts", {
+    method: "POST",
+    body: { userId, tier },
+  });
+  return data.id;
 }
 
 export async function getActiveAttempt(userId: string, tier: string): Promise<QuizAttempt | null> {
-  const { data } = await supabase
-    .from("quiz_attempts")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("certification_tier", tier)
-    .eq("status", "in_progress")
-    .order("started_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return (data as QuizAttempt) ?? null;
+  return apiFetch<QuizAttempt | null>("/attempts/active", {
+    query: { userId, tier },
+  });
 }
 
 export async function saveAnswerToAttempt(
@@ -124,60 +149,32 @@ export async function saveAnswerToAttempt(
   aiGrade: boolean,
   aiReasoning: string,
 ): Promise<void> {
-  const { error } = await supabase.from("answers").upsert(
-    {
-      attempt_id: attemptId,
-      question_id: questionId,
+  await apiFetch<void>(`/attempts/${attemptId}/answers`, {
+    method: "POST",
+    body: {
+      questionId,
       section,
-      user_answer: userAnswer,
-      ai_grade: aiGrade,
-      ai_reasoning: aiReasoning,
+      userAnswer,
+      aiGrade,
+      aiReasoning,
     },
-    { onConflict: "attempt_id,question_id" },
-  );
-  if (error) throw error;
+  });
 }
 
 export async function completeAttempt(
   attemptId: string,
   config: { total_questions: number; passing_threshold: number },
 ): Promise<ScoreResult> {
-  const { data: answers, error } = await supabase
-    .from("answers")
-    .select("section, final_grade")
-    .eq("attempt_id", attemptId);
-
-  if (error) throw error;
-
-  const result = calculateScore(
-    answers ?? [],
-    config.total_questions,
-    config.passing_threshold,
-  );
-
-  await supabase
-    .from("quiz_attempts")
-    .update({
-      status: result.passed ? "passed" : "failed",
-      completed_at: new Date().toISOString(),
-      total_correct: result.total_correct,
-      total_questions: result.total_questions,
-      section_errors: result.section_errors,
-      score_percent: result.score_percent,
-    })
-    .eq("id", attemptId);
-
-  return result;
+  return apiFetch<ScoreResult>(`/attempts/${attemptId}/complete`, {
+    method: "POST",
+    body: config,
+  });
 }
 
 // ── Certifications ────────────────────────────────────────────────────────────
 
 export async function getUserCertifications(userId: string): Promise<Certification[]> {
-  const { data } = await supabase
-    .from("certifications")
-    .select("*")
-    .eq("user_id", userId);
-  return (data ?? []) as Certification[];
+  return apiFetch<Certification[]>(`/users/${userId}/certifications`);
 }
 
 export async function grantCertification(
@@ -186,18 +183,16 @@ export async function grantCertification(
   attemptId: string,
   grantedBy = "system",
 ): Promise<void> {
-  await supabase.from("certifications").upsert(
-    { user_id: userId, certification_tier: tier, attempt_id: attemptId, granted_by: grantedBy },
-    { onConflict: "user_id,certification_tier" },
-  );
+  await apiFetch<void>(`/users/${userId}/certifications`, {
+    method: "POST",
+    body: { tier, attemptId, grantedBy },
+  });
 }
 
 export async function revokeCertification(userId: string, tier: string): Promise<void> {
-  await supabase
-    .from("certifications")
-    .delete()
-    .eq("user_id", userId)
-    .eq("certification_tier", tier);
+  await apiFetch<void>(`/users/${userId}/certifications/${encodeURIComponent(tier)}`, {
+    method: "DELETE",
+  });
 }
 
 // ── Progress ──────────────────────────────────────────────────────────────────
@@ -206,65 +201,32 @@ export async function getUserProgress(
   userId: string,
   tier: string,
 ): Promise<{ correct: number; total: number; certified: boolean }> {
-  const [certResult, configResult, answersResult] = await Promise.all([
-    supabase
-      .from("certifications")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("certification_tier", tier)
-      .maybeSingle(),
-    supabase
-      .from("quiz_configs")
-      .select("total_questions")
-      .eq("certification_tier", tier)
-      .single(),
-    supabase
-      .from("answers")
-      .select("question_id, final_grade, quiz_attempts!inner(user_id, certification_tier, status)")
-      .eq("quiz_attempts.user_id", userId)
-      .eq("quiz_attempts.certification_tier", tier)
-      .eq("final_grade", true),
-  ]);
-
-  const total = configResult.data?.total_questions ?? 55;
-  // Deduplicate: a question answered correctly in multiple attempts counts once
-  const uniqueCorrect = new Set((answersResult.data ?? []).map((a: { question_id: string }) => a.question_id)).size;
-
-  return {
-    correct: uniqueCorrect,
-    total,
-    certified: !!certResult.data,
-  };
+  return apiFetch<{ correct: number; total: number; certified: boolean }>(
+    `/users/${userId}/progress`,
+    { query: { tier } },
+  );
 }
 
 // ── Quiz configs ──────────────────────────────────────────────────────────────
 
 export async function getQuizConfigs(): Promise<QuizConfig[]> {
-  const { data } = await supabase
-    .from("quiz_configs")
-    .select("*")
-    .order("certification_tier");
-  return (data ?? []) as QuizConfig[];
+  return apiFetch<QuizConfig[]>("/quiz-configs");
 }
 
 export async function getActiveConfig(tier: string): Promise<QuizConfig | null> {
-  const { data } = await supabase
-    .from("quiz_configs")
-    .select("*")
-    .eq("certification_tier", tier)
-    .single();
-  return (data as QuizConfig) ?? null;
+  return apiFetch<QuizConfig | null>("/quiz-configs/active", {
+    query: { tier },
+  });
 }
 
 export async function updateQuizConfig(
   id: string,
   updates: Partial<Pick<QuizConfig, "total_questions" | "passing_threshold" | "questions_source_url" | "is_active">>,
 ): Promise<void> {
-  const { error } = await supabase
-    .from("quiz_configs")
-    .update({ ...updates, updated_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) throw error;
+  await apiFetch<void>(`/quiz-configs/${id}`, {
+    method: "PUT",
+    body: { ...updates, updated_at: new Date().toISOString() },
+  });
 }
 
 // ── Leaderboard ───────────────────────────────────────────────────────────────
@@ -278,54 +240,16 @@ export interface LeaderboardEntry {
 }
 
 export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
-  try {
-    const [usersResult, attemptsResult, certsResult] = await Promise.all([
-      supabase.from("users").select("id, full_name"),
-      supabase
-        .from("quiz_attempts")
-        .select("user_id, total_correct")
-        .eq("certification_tier", "junior")
-        .not("total_correct", "is", null),
-      supabase
-        .from("certifications")
-        .select("user_id")
-        .eq("certification_tier", "junior"),
-    ]);
-
-    const certifiedIds = new Set((certsResult.data ?? []).map((c: { user_id: string }) => c.user_id));
-
-    // Best total_correct across all attempts per user
-    const bestByUser = new Map<string, number>();
-    for (const a of (attemptsResult.data ?? []) as { user_id: string; total_correct: number | null }[]) {
-      const current = bestByUser.get(a.user_id) ?? 0;
-      if ((a.total_correct ?? 0) > current) bestByUser.set(a.user_id, a.total_correct ?? 0);
-    }
-
-    return ((usersResult.data ?? []) as { id: string; full_name: string }[])
-      .map((u) => ({
-        id: u.id,
-        full_name: u.full_name,
-        correct: bestByUser.get(u.id) ?? 0,
-        total: 55,
-        certified: certifiedIds.has(u.id),
-      }))
-      .sort((a, b) => b.correct - a.correct);
-  } catch {
-    return [];
-  }
+  return apiFetch<LeaderboardEntry[]>("/leaderboard");
 }
 
 // ── Completed sections ────────────────────────────────────────────────────────
 
 export async function getCompletedSections(userId: string, tier: string): Promise<Set<string>> {
-  const { data } = await supabase
-    .from("answers")
-    .select("section, quiz_attempts!inner(user_id, certification_tier, status)")
-    .eq("quiz_attempts.user_id", userId)
-    .eq("quiz_attempts.certification_tier", tier)
-    .neq("quiz_attempts.status", "in_progress");
-  const sections = new Set((data ?? []).map((a: { section: string }) => a.section));
-  return sections;
+  const sections = await apiFetch<string[]>(`/users/${userId}/completed-sections`, {
+    query: { tier },
+  });
+  return new Set(sections);
 }
 
 // ── Admin — user list ─────────────────────────────────────────────────────────
@@ -342,37 +266,14 @@ export interface AdminUserRow {
 }
 
 export async function adminGetAllUsers(): Promise<AdminUserRow[]> {
-  const { data, error } = await supabase
-    .from("users")
-    .select(`
-      id, email, full_name, is_admin, created_at, last_login,
-      certifications(certification_tier, granted_at),
-      quiz_attempts(id, certification_tier, attempt_number, status, score_percent,
-                    total_correct, total_questions, section_errors,
-                    started_at, completed_at)
-    `)
-    .order("created_at", { ascending: false });
-
-  if (error) throw error;
-
-  return ((data ?? []) as any[]).map((u) => ({
-    id: u.id,
-    email: u.email,
-    full_name: u.full_name,
-    is_admin: u.is_admin ?? false,
-    created_at: u.created_at,
-    last_login: u.last_login,
-    certifications: u.certifications ?? [],
-    attempts: (u.quiz_attempts ?? []).sort(
-      (a: QuizAttempt, b: QuizAttempt) =>
-        new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
-    ),
-  }));
+  return apiFetch<AdminUserRow[]>("/admin/users");
 }
 
 export async function adminSetUserAdmin(userId: string, isAdmin: boolean): Promise<void> {
-  const { error } = await supabase.from("users").update({ is_admin: isAdmin }).eq("id", userId);
-  if (error) throw error;
+  await apiFetch<void>(`/admin/users/${userId}/admin`, {
+    method: "PUT",
+    body: { isAdmin },
+  });
 }
 
 // ── Admin — attempt detail with all answers ───────────────────────────────────
@@ -383,24 +284,7 @@ export interface AttemptWithAnswers extends QuizAttempt {
 }
 
 export async function adminGetAttemptDetails(attemptId: string): Promise<AttemptWithAnswers | null> {
-  const { data, error } = await supabase
-    .from("quiz_attempts")
-    .select(`
-      *,
-      answers(*),
-      users(email, full_name)
-    `)
-    .eq("id", attemptId)
-    .single();
-
-  if (error || !data) return null;
-  return {
-    ...(data as any),
-    user: (data as any).users,
-    answers: ((data as any).answers ?? []).sort((a: Answer, b: Answer) =>
-      a.question_id.localeCompare(b.question_id),
-    ),
-  } as AttemptWithAnswers;
+  return apiFetch<AttemptWithAnswers | null>(`/admin/attempts/${attemptId}`);
 }
 
 // ── Admin — override an answer and recalculate ────────────────────────────────
@@ -411,51 +295,18 @@ export async function adminOverrideAnswer(
   attemptId: string,
   config: { total_questions: number; passing_threshold: number },
 ): Promise<ScoreResult> {
-  await supabase
-    .from("answers")
-    .update({ admin_override: override })
-    .eq("id", answerId);
-
-  const { data: answers } = await supabase
-    .from("answers")
-    .select("section, final_grade")
-    .eq("attempt_id", attemptId);
-
-  const result = calculateScore(
-    answers ?? [],
-    config.total_questions,
-    config.passing_threshold,
-  );
-
-  await supabase
-    .from("quiz_attempts")
-    .update({
-      status: result.passed ? "passed" : "failed",
-      total_correct: result.total_correct,
-      section_errors: result.section_errors,
-      score_percent: result.score_percent,
-    })
-    .eq("id", attemptId);
-
-  return result;
+  return apiFetch<ScoreResult>(`/admin/answers/${answerId}/override`, {
+    method: "POST",
+    body: { override, attemptId, config },
+  });
 }
 
-// ── Admin — CSV export ────────────────────────────────────────────────────────
+// ── Admin — CSV export ───────────────────────────────────────────────────────
 
 export async function adminGetAllAttempts(): Promise<
   (QuizAttempt & { user_email: string; user_name: string })[]
 > {
-  const { data, error } = await supabase
-    .from("quiz_attempts")
-    .select("*, users(email, full_name)")
-    .order("started_at", { ascending: false });
-
-  if (error) return [];
-  return ((data ?? []) as any[]).map((a) => ({
-    ...a,
-    user_email: a.users?.email ?? "",
-    user_name: a.users?.full_name ?? "",
-  }));
+  return apiFetch<(QuizAttempt & { user_email: string; user_name: string })[]>("/admin/attempts");
 }
 
 export function exportAttemptsToCSV(

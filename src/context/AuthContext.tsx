@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { supabase } from "@/lib/supabase";
+import { getStoredToken, getStoredUser, type StoredUser } from "@/lib/auth";
 
 export interface AuthUser {
   id: string;
@@ -22,88 +22,77 @@ const AuthContext = createContext<AuthContextType>({
   refresh: async () => {},
 });
 
+const API = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+
+function toAuthUser(u: StoredUser): AuthUser {
+  const parts = (u.full_name || u.email).split(" ");
+  return {
+    id: u.id,
+    email: u.email,
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" ") || "",
+    fullName: u.full_name || u.email,
+    isAdmin: !!u.is_admin,
+  };
+}
+
+async function fetchMe(): Promise<StoredUser | null> {
+  const token = getStoredToken();
+  if (!token || !API) return null;
+  try {
+    const res = await fetch(`${API.replace(/\/+$/, "")}/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
-  function buildUser(id: string, email: string, meta: Record<string, string>, isAdmin: boolean): AuthUser {
-    const fullName: string = meta?.full_name || email;
-    const parts = fullName.split(" ");
-    return {
-      id,
-      email,
-      firstName: meta?.first_name || parts[0] || "",
-      lastName: meta?.last_name || parts.slice(1).join(" ") || "",
-      fullName,
-      isAdmin,
-    };
-  }
+  async function loadUser() {
+    // Show cached user immediately to avoid flicker
+    const cached = getStoredUser();
+    if (cached) setUser(toAuthUser(cached));
 
-  async function loadUser(id: string, email: string, meta: Record<string, string>) {
-    // Set user immediately with auth metadata so the app never hangs
-    setUser(buildUser(id, email, meta, false));
-
-    // Then enrich with DB profile (is_admin, full_name) in the background
-    try {
-      const { data: profile } = await supabase
-        .from("users")
-        .select("is_admin, full_name")
-        .eq("id", id)
-        .maybeSingle();
-
-      if (profile) {
-        const enrichedMeta = { ...meta, full_name: profile.full_name || meta?.full_name || email };
-        setUser(buildUser(id, email, enrichedMeta, profile.is_admin ?? false));
-      }
-    } catch {
-      // Profile fetch failed — user already set with basic info above, that's fine
+    // Refresh from server
+    const fresh = await fetchMe();
+    if (fresh) {
+      localStorage.setItem("ldk_user", JSON.stringify(fresh));
+      setUser(toAuthUser(fresh));
+    } else if (!cached) {
+      setUser(null);
     }
+    // If server is unreachable but cache exists, keep cached user
   }
 
   async function refresh() {
-    const { data: { user: u } } = await supabase.auth.getUser();
-    if (u) {
-      await loadUser(u.id, u.email ?? "", (u.user_metadata ?? {}) as Record<string, string>);
-    }
+    await loadUser();
   }
 
   useEffect(() => {
-    // Hard timeout: never stay in loading state more than 4 seconds
     const timeout = setTimeout(() => setLoading(false), 4000);
-
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session?.user) {
-        await loadUser(
-          session.user.id,
-          session.user.email ?? "",
-          (session.user.user_metadata ?? {}) as Record<string, string>,
-        );
-      }
-      clearTimeout(timeout);
-      setLoading(false);
-    }).catch(() => {
+    loadUser().finally(() => {
       clearTimeout(timeout);
       setLoading(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (session?.user) {
-          await loadUser(
-            session.user.id,
-            session.user.email ?? "",
-            (session.user.user_metadata ?? {}) as Record<string, string>,
-          );
-        } else {
-          setUser(null);
-        }
-      },
-    );
-
+    function onStorage(e: StorageEvent) {
+      if (e.key === "ldk_jwt" || e.key === "ldk_user") {
+        if (!e.newValue) setUser(null);
+        else loadUser();
+      }
+    }
+    window.addEventListener("storage", onStorage);
     return () => {
       clearTimeout(timeout);
-      subscription.unsubscribe();
+      window.removeEventListener("storage", onStorage);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
