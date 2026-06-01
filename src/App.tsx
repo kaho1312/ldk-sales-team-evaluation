@@ -10,6 +10,7 @@ import Admin from "./pages/Admin.tsx";
 import AdminAttempt from "./pages/AdminAttempt.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { getStoredToken } from "@/lib/auth";
 import { useEffect, useState } from "react";
 
 const queryClient = new QueryClient();
@@ -38,7 +39,7 @@ function Loading() {
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
-  if (loading) return <Loading />;
+  if (loading || (!user && getStoredToken())) return <Loading />;
   if (!user) return <Navigate to="/login" replace />;
   return <>{children}</>;
 }
