@@ -47,7 +47,7 @@ function saveEarnedTierLocal(email: string, tier: string) {
   localStorage.setItem(EARNED_TIER_KEY(email, tier), "1");
 }
 
-// Map Supabase tier strings to display names
+// Map backend tier strings to display names
 function tierKey(dbTier: string): string {
   if (dbTier === "junior") return "Junior";
   if (dbTier === "mid-level") return "Mid-Level";
@@ -103,7 +103,7 @@ export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
 
-  // Certifications — initialized from localStorage cache, refreshed from Supabase
+  // Certifications — initialized from localStorage cache, refreshed from backend
   const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiersLocal(agentKey));
   const [justEarned, setJustEarned] = useState<string | null>(null);
 
@@ -118,7 +118,7 @@ export default function Index() {
   const [currentQ, setCurrentQ] = useState(0);
   const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[]>([]);
 
-  // Supabase attempt tracking
+  // Backend attempt tracking
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
   const [completedSections, setCompletedSections] = useState<Set<string>>(new Set());
   const [quizConfig, setQuizConfig] = useState<{ total_questions: number; passing_threshold: number }>({
@@ -126,10 +126,10 @@ export default function Index() {
     passing_threshold: 0.9,
   });
 
-  // Supabase progress (async, replaces localStorage progress bar)
+  // Backend progress (async, replaces localStorage progress bar)
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
 
-  // Local progress (fast, shown while Supabase loads)
+  // Local progress (fast, shown while backend loads)
   const localAgentProgress = getAgentProgress(agentKey);
   const localProgressPercent = getProgressPercent(agentKey);
 
@@ -159,11 +159,11 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
   const sectionCounts = useMemo(() => getSectionCounts(allQuestions, "Junior"), [allQuestions]);
   const q = sessionQuestions[currentQ];
 
-  // ── Load Supabase data on mount ──────────────────────────────────────────
+  // ── Load backend data on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
 
-    // Load certifications from Supabase and sync to local cache
+    // Load certifications from backend and sync to local cache
     getUserCertifications(user.id).then((certs) => {
       const fromDb = new Set(certs.map((c) => tierKey(c.certification_tier)));
       // Merge with local (local may have data not yet in DB during migration window)
@@ -175,7 +175,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
       }
     });
 
-    // Load progress from Supabase
+    // Load progress from backend
     getUserProgress(user.id, "junior").then(setProgressData);
 
     // Load completed sections
@@ -267,9 +267,9 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
-    setScreen("quiz"); // switch immediately — don't wait for Supabase
+    setScreen("quiz"); // switch immediately — don't wait for backend
 
-    // Start a Supabase attempt in the background (non-blocking)
+    // Start a backend attempt in the background (non-blocking)
     if (user) {
       startAttempt(user.id, "junior")
         .then((attemptId) => setCurrentAttemptId(attemptId))
@@ -298,14 +298,14 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
     };
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      const res = await fetch(`${supabaseUrl}/functions/v1/grade-answer`, {
+      const graderUrl = import.meta.env.VITE_GRADER_URL as string;
+      const graderKey = import.meta.env.VITE_GRADER_KEY as string | undefined;
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (graderKey) headers["x-api-key"] = graderKey;
+
+      const res = await fetch(graderUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseKey}`,
-        },
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -329,7 +329,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
       // Write to localStorage (local progress bar cache)
       saveAnswer(agentKey, q.id, correct);
 
-      // Write to Supabase (authoritative record)
+      // Write to backend (authoritative record)
       if (currentAttemptId) {
         saveAnswerToAttempt(
           currentAttemptId,
@@ -371,7 +371,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
             setJustEarned(activeTier);
           }
         } catch {
-          // Fall back to local check if Supabase fails
+          // Fall back to local check if backend fails
           const latestProgress = getAgentProgress(agentKey);
           if (latestProgress.certified && !earnedTiers.has(activeTier)) {
             saveEarnedTierLocal(agentKey, activeTier);
@@ -380,7 +380,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
           }
         }
       } else {
-        // No Supabase attempt — use local check
+        // No backend attempt — use local check
         const latestProgress = getAgentProgress(agentKey);
         if (latestProgress.certified && !earnedTiers.has(activeTier)) {
           saveEarnedTierLocal(agentKey, activeTier);
@@ -409,7 +409,7 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
     setScreen("start");
   };
 
-  // Supabase progress for the results screen (reload after attempt)
+  // Backend progress for the results screen (reload after attempt)
   const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct.length);
   const liveTotal = progressData?.total ?? 55;
 
