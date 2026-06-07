@@ -6,6 +6,8 @@ const scryptAsync = promisify(scrypt);
 const JWT_SECRET = process.env.JWT_SECRET || 'ldk-quiz-secret-change-in-prod';
 const JWT_TTL = 60 * 60 * 24 * 7; // 7 days
 
+const ADMIN_EMAILS = new Set(['kay@ldk.lat', 'fernanda@ldk.lat', 'joaquin.g@ldk.lat']);
+
 // ── DB pool ───────────────────────────────────────────────────────────────────
 
 let pool;
@@ -119,9 +121,10 @@ export const handler = async (event) => {
 
       const id = randomUUID();
       const hash = await hashPwd(password);
-      await conn.query('INSERT INTO users (id, email, full_name, password_hash) VALUES (?, ?, ?, ?)', [id, norm, full_name.trim(), hash]);
+      const isAdmin = ADMIN_EMAILS.has(norm) ? 1 : 0;
+      await conn.query('INSERT INTO users (id, email, full_name, password_hash, is_admin) VALUES (?, ?, ?, ?, ?)', [id, norm, full_name.trim(), hash, isAdmin]);
       const jwt = signToken({ sub: id, email: norm });
-      return ok({ token: jwt, user: { id, email: norm, full_name: full_name.trim(), is_admin: false } }, 201);
+      return ok({ token: jwt, user: { id, email: norm, full_name: full_name.trim(), is_admin: !!isAdmin } }, 201);
     }
 
     // ── POST /auth/login ───────────────────────────────────────────────────────
@@ -162,6 +165,17 @@ export const handler = async (event) => {
       const uid = q.userId || claims.sub;
       const [rows] = await conn.query('SELECT * FROM quiz_attempts WHERE user_id = ? AND certification_tier = ? AND status = ? ORDER BY started_at DESC LIMIT 1', [uid, (q.tier || 'junior').toLowerCase(), 'in_progress']);
       return ok(rows[0] || null);
+    }
+
+    // ── GET /attempts/:id/answers (own attempt — for break/resume) ────────────
+    if (method === 'GET' && seg[0] === 'attempts' && seg[2] === 'answers') {
+      const [[attempt]] = await conn.query('SELECT user_id FROM quiz_attempts WHERE id = ?', [seg[1]]);
+      if (!attempt || attempt.user_id !== claims.sub) return fail('Forbidden', 403);
+      const [rows] = await conn.query(
+        'SELECT question_id, section, ai_grade FROM answers WHERE attempt_id = ? ORDER BY created_at ASC',
+        [seg[1]]
+      );
+      return ok(rows);
     }
 
     // ── POST /attempts/:id/answers ─────────────────────────────────────────────

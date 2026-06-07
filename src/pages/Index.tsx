@@ -23,14 +23,15 @@ import {
   getUserCertifications,
   getUserProgress,
   getActiveConfig,
+  getActiveAttempt,
+  getAttemptAnswers,
   getCompletedSections,
 } from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
 
-// ── localStorage keys (kept for break/resume and local cache) ─────────────────
+// ── localStorage keys (certification cache only) ──────────────────────────────
 const EARNED_TIER_KEY = (email: string, tier: string) => `ldk_earned_tier_${tier}_${email}`;
-const BREAK_KEY = (email: string) => `ldk_break_${email}`;
 const ALL_TIERS = ["Junior", "Mid-Level", "Senior"] as const;
 
 function getEarnedTiersLocal(email: string): Set<string> {
@@ -55,27 +56,11 @@ function tierKey(dbTier: string): string {
 }
 
 interface SavedBreak {
-  agentEmail: string;
+  attemptId: string;
   section: Section;
   currentQuestionIndex: number;
-  answers: { id: string; question: string; isCorrect: boolean }[];
-  score: number;
-  savedAt: string;
+  answers: { id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[];
   totalQuestions: number;
-  testMode: boolean;
-}
-
-function getSavedBreak(email: string): SavedBreak | null {
-  try {
-    const raw = localStorage.getItem(BREAK_KEY(email));
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function clearSavedBreak(email: string) {
-  localStorage.removeItem(BREAK_KEY(email));
 }
 
 function TierBadge({ tier }: { tier: string }) {
@@ -160,8 +145,8 @@ export default function Index() {
   useEffect(() => {
     if (!user) return;
 
-    // Load saved break now that we know the user's email
-    setSavedBreak(getSavedBreak(user.email));
+    // Check backend for in-progress attempt (break/resume)
+    checkForActiveAttempt(user.id);
 
     // Load certifications from backend and sync to local cache
     getUserCertifications(user.id).then((certs) => {
@@ -193,11 +178,41 @@ export default function Index() {
 
   }, [user?.id]);
 
-  // Refresh progress and completed sections after returning to start screen
+  // ── Check backend for in-progress attempt (break/resume) ─────────────────
+  async function checkForActiveAttempt(userId: string) {
+    try {
+      const active = await getActiveAttempt(userId, "junior");
+      if (!active) { setSavedBreak(null); return; }
+      const answers = await getAttemptAnswers(active.id);
+      if (!answers.length) { setSavedBreak(null); return; }
+      const rawSection = answers[0].section;
+      const section = (rawSection === "All" ? "A" : rawSection) as Section;
+      const totalMap: Record<Section, number> = { A: 28, B: 13, C: 14, All: 55 };
+      setCurrentAttemptId(active.id);
+      setSavedBreak({
+        attemptId: active.id,
+        section,
+        currentQuestionIndex: answers.length,
+        answers: answers.map((a) => ({
+          id: a.question_id,
+          question: "",
+          isCorrect: !!a.ai_grade,
+          feedback: "",
+          correctAnswer: "",
+        })),
+        totalQuestions: totalMap[section] ?? 28,
+      });
+    } catch {
+      setSavedBreak(null);
+    }
+  }
+
+  // Refresh progress, sections and in-progress break after returning to start screen
   useEffect(() => {
     if (screen === "start" && user) {
       getUserProgress(user.id, "junior").then(setProgressData);
       getCompletedSections(user.id, "junior").then(setCompletedSections);
+      checkForActiveAttempt(user.id);
     }
   }, [screen, user?.id]);
 
@@ -213,32 +228,25 @@ export default function Index() {
     setSelectedSection(savedBreak.section);
     setCurrentQ(savedBreak.currentQuestionIndex);
     setSessionResults(savedBreak.answers);
-    setTestMode(savedBreak.testMode ?? false);
+    setTestMode(false);
     resetGrading();
-    clearSavedBreak(agentKey);
     setSavedBreak(null);
     setScreen("quiz");
   };
 
   const handleDiscardBreak = () => {
-    clearSavedBreak(agentKey);
+    // Complete the in-progress attempt so it doesn't reappear
+    if (savedBreak?.attemptId) {
+      completeAttempt(savedBreak.attemptId, quizConfig).catch(() => {});
+    }
+    setCurrentAttemptId(null);
     setSavedBreak(null);
   };
 
   // ── Take a break ─────────────────────────────────────────────────────────
   const handleBreak = () => {
-    const breakData: SavedBreak = {
-      agentEmail: agentKey,
-      section: selectedSection,
-      currentQuestionIndex: currentQ,
-      answers: sessionResults,
-      score: sessionResults.filter((r) => r.isCorrect).length,
-      savedAt: new Date().toISOString(),
-      totalQuestions: sessionQuestions.length,
-      testMode,
-    };
-    localStorage.setItem(BREAK_KEY(agentKey), JSON.stringify(breakData));
-    setSavedBreak(breakData);
+    // Answers are already saved to the backend per question — just go to start.
+    // The start screen useEffect will re-check the backend and restore the resume card.
     toast.success(t.breakSaved);
     setSessionResults([]);
     setCurrentQ(0);
@@ -375,7 +383,6 @@ export default function Index() {
         }
       }
 
-      clearSavedBreak(agentKey);
       setScreen("results");
       return;
     }
@@ -391,7 +398,7 @@ export default function Index() {
     setJustEarned(null);
     setTestMode(false);
     setCurrentAttemptId(null);
-    setSavedBreak(getSavedBreak(agentKey));
+    setSavedBreak(null); // start screen useEffect will re-check backend
     setScreen("start");
   };
 

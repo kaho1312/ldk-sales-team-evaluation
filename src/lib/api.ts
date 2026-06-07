@@ -141,6 +141,12 @@ export async function getActiveAttempt(userId: string, tier: string): Promise<Qu
   });
 }
 
+export async function getAttemptAnswers(
+  attemptId: string,
+): Promise<{ question_id: string; section: string; ai_grade: boolean | null }[]> {
+  return apiFetch(`/attempts/${attemptId}/answers`);
+}
+
 export async function saveAnswerToAttempt(
   attemptId: string,
   questionId: string,
