@@ -141,10 +141,7 @@ export default function Index() {
 
   // Questions
   const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
-const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBreak(agentKey));
-
-  // Migration banner
-  const [showMigrationBanner, setShowMigrationBanner] = useState(false);
+  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(null);
 
   const t = LANG[lang];
 
@@ -162,6 +159,9 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
   // ── Load backend data on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
+
+    // Load saved break now that we know the user's email
+    setSavedBreak(getSavedBreak(user.email));
 
     // Load certifications from backend and sync to local cache
     getUserCertifications(user.id).then((certs) => {
@@ -191,11 +191,6 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
       }
     });
 
-    // Check for localStorage migration data
-    const hasOldData = Object.keys(localStorage).some(
-      (k) => k.startsWith("ldk_agent_progress"),
-    );
-    if (hasOldData) setShowMigrationBanner(true);
   }, [user?.id]);
 
   // Refresh progress and completed sections after returning to start screen
@@ -210,15 +205,6 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
   const handleLogout = async () => {
     await logout();
     window.location.replace("/login");
-  };
-
-  // ── Migration: dismiss or clear old localStorage data ───────────────────
-  const handleDismissMigration = () => {
-    Object.keys(localStorage)
-      .filter((k) => k.startsWith("ldk_agent_progress") || k.startsWith("ldk_users"))
-      .forEach((k) => localStorage.removeItem(k));
-    setShowMigrationBanner(false);
-    toast.success(lang === "es" ? "Datos locales eliminados." : "Local data cleared.");
   };
 
   // ── Resume from break ────────────────────────────────────────────────────
@@ -478,26 +464,6 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
         {/* ── START SCREEN ── */}
         {screen === "start" && (
           <div>
-            {/* Migration banner */}
-            {showMigrationBanner && (
-              <div className="bg-warning/5 border border-warning/20 rounded-xl p-3.5 mb-4">
-                <div className="text-xs font-bold text-warning mb-1">
-                  {lang === "es" ? "Datos locales detectados" : "Local data detected"}
-                </div>
-                <div className="text-[11px] text-muted-foreground mb-3">
-                  {lang === "es"
-                    ? "Tu historial anterior estaba guardado en este dispositivo. Ahora los datos se guardan en la nube automáticamente."
-                    : "Your previous history was stored on this device. Data is now saved to the cloud automatically."}
-                </div>
-                <button
-                  onClick={handleDismissMigration}
-                  className="text-[11px] font-bold text-warning/80 hover:text-warning transition-colors"
-                >
-                  {lang === "es" ? "Limpiar datos locales" : "Clear local data"}
-                </button>
-              </div>
-            )}
-
             {/* User greeting + certification badges */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-4">
               <div className="flex items-start justify-between gap-2 mb-1">
@@ -661,33 +627,6 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
               })}
             </div>
 
-            {/* Quick Test mode */}
-            <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 mb-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-0.5">
-                    {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {lang === "es"
-                      ? "Solo 3 preguntas · Ideal para verificar que todo funciona"
-                      : "Only 3 questions · Ideal for verifying everything works"}
-                  </div>
-                </div>
-              </div>
-              <div className="flex gap-2 mt-3">
-                {(["A", "B", "C"] as Section[]).map((sec) => (
-                  <button
-                    key={sec}
-                    className="flex-1 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-xs font-bold py-2 hover:bg-amber-500/20 transition-colors"
-                    onClick={() => handleSectionStart(sec, true)}
-                  >
-                    {`Sec. ${sec}`} · 3
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <button
               className="w-full bg-transparent border border-border rounded-xl text-muted-foreground text-sm font-semibold py-3 hover:border-muted-foreground/30 transition-all"
               onClick={() => setScreen("start")}
@@ -700,12 +639,6 @@ const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(() => getSavedBr
         {/* ── QUIZ SCREEN ── */}
         {screen === "quiz" && q && (
           <>
-            {testMode && (
-              <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-1.5 mb-4 text-[11px] font-bold text-amber-400 uppercase tracking-wider text-center">
-                {lang === "es" ? "Modo Prueba Rápida" : "Quick Test Mode"} · 3{" "}
-                {lang === "es" ? "preguntas" : "questions"}
-              </div>
-            )}
             <QuizQuestionView
               key={q.id}
               question={q}
