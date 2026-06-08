@@ -179,7 +179,9 @@ export default function Index() {
       const sessions = await getActiveAttempts(userId, "junior");
       const map: Record<string, { attemptId: string; answeredCount: number }> = {};
       for (const s of sessions) {
-        map[s.section] = { attemptId: s.attemptId, answeredCount: s.answeredCount };
+        if (!map[s.section]) {  // SQL orders DESC by answer count — keep the first (most progress) per section
+          map[s.section] = { attemptId: s.attemptId, answeredCount: s.answeredCount };
+        }
       }
       setActiveSessions(map);
     } catch {
