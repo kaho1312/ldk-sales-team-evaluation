@@ -54,8 +54,8 @@ CORS is handled in Lambda code only. Never enable CORS in AWS Function URL setti
 - ✅ FIXED: Multiple in-progress sessions — home screen now shows ALL sections with saved progress simultaneously; removed separate saved-session card; sections are clickable cards with inline "Empezar de nuevo" option
 - ✅ FIXED: Highest-answered attempt wins per section — getActiveAttempts orders by answer count DESC and frontend keeps first result per section
 - 🔴 "0/0 respuestas correctas acumuladas" not pulling from RDS — needs to call getUserProgress and display real numbers
-- 🔴 AI coaching shows "Error al conectar con el servidor de evaluación" — CORS OPTIONS handler missing in ldk-quiz-grader Lambda
-- 🔴 No pause button visible during active quiz session
+- ✅ FIXED: AI coaching CORS error — OPTIONS handler added to ldk-quiz-grader Lambda
+- ✅ FIXED: Pause button now visible during active quiz session
 
 ## Home screen architecture (as of June 8, 2026)
 - Section A/B/C are interactive cards in the "Tu Progreso" block — no separate section picker screen
@@ -67,8 +67,6 @@ CORS is handled in Lambda code only. Never enable CORS in AWS Function URL setti
 
 ## Next session priorities (in order)
 1. Fix "respuestas correctas acumuladas" counter — wire to getUserProgress from RDS
-2. Fix AI coaching CORS error — add OPTIONS handler to ldk-quiz-grader Lambda
-3. Add pause button to quiz UI
 
 ## What NOT to do
 - Do not edit root-level .tsx files — they are dead drafts
