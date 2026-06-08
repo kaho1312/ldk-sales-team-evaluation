@@ -259,6 +259,11 @@ export default function Index() {
 
   // ── Section selection → start quiz ───────────────────────────────────────
   const handleSectionStart = (section: Section, isTestMode = false) => {
+    // Resume the in-progress attempt instead of starting fresh
+    if (!isTestMode && savedBreak?.section === section) {
+      handleResume();
+      return;
+    }
     setSelectedSection(section);
     setTestMode(isTestMode);
     setSessionResults([]);
@@ -609,6 +614,7 @@ export default function Index() {
                 };
                 const count = sec === "A" ? sectionCounts.A : sec === "B" ? sectionCounts.B : sectionCounts.C;
                 const isDone = completedSections.has(sec);
+                const isResume = !isDone && savedBreak?.section === sec;
                 const answered = Math.min(sectionProgress[sec], count);
                 const pct = count > 0 ? Math.round((answered / count) * 100) : 0;
                 return (
@@ -629,7 +635,9 @@ export default function Index() {
                         <div className="text-xs text-muted-foreground mt-0.5">
                           {isDone
                             ? (lang === "es" ? "Completada · Puedes repetirla" : "Completed · Can retake")
-                            : labels[sec].desc}
+                            : isResume
+                              ? (lang === "es" ? `Continuar desde pregunta ${savedBreak!.currentQuestionIndex + 1}` : `Resume from question ${savedBreak!.currentQuestionIndex + 1}`)
+                              : labels[sec].desc}
                         </div>
                       </div>
                       <div className="text-right">
