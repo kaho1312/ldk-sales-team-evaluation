@@ -249,6 +249,21 @@ export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
   return apiFetch<LeaderboardEntry[]>("/leaderboard");
 }
 
+// ── Active in-progress attempts (all sections simultaneously) ─────────────────
+
+export interface ActiveAttemptInfo {
+  attemptId: string;
+  section: string;
+  answeredCount: number;
+}
+
+export async function getActiveAttempts(
+  userId: string,
+  tier: string,
+): Promise<ActiveAttemptInfo[]> {
+  return apiFetch<ActiveAttemptInfo[]>(`/users/${userId}/active-attempts`, { query: { tier } });
+}
+
 // ── Completed sections ────────────────────────────────────────────────────────
 
 export async function getSectionProgress(

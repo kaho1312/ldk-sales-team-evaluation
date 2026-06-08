@@ -23,8 +23,7 @@ import {
   getUserCertifications,
   getUserProgress,
   getActiveConfig,
-  getActiveAttempt,
-  getAttemptAnswers,
+  getActiveAttempts,
   getCompletedSections,
   getSectionProgress,
 } from "@/lib/api";
@@ -56,13 +55,6 @@ function tierKey(dbTier: string): string {
   return "Senior";
 }
 
-interface SavedBreak {
-  attemptId: string;
-  section: Section;
-  currentQuestionIndex: number;
-  answers: { id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[];
-  totalQuestions: number;
-}
 
 function TierBadge({ tier }: { tier: string }) {
   const styles =
@@ -128,7 +120,7 @@ export default function Index() {
 
   // Questions
   const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
-  const [savedBreak, setSavedBreak] = useState<SavedBreak | null>(null);
+  const [activeSessions, setActiveSessions] = useState<Record<string, { attemptId: string; answeredCount: number }>>({});
 
   const t = LANG[lang];
 
@@ -147,8 +139,8 @@ export default function Index() {
   useEffect(() => {
     if (!user) return;
 
-    // Check backend for in-progress attempt (break/resume)
-    checkForActiveAttempt(user.id);
+    // Check backend for all in-progress attempts
+    checkForActiveSessions(user.id);
 
     // Load certifications from backend and sync to local cache
     getUserCertifications(user.id).then((certs) => {
@@ -181,42 +173,27 @@ export default function Index() {
 
   }, [user?.id]);
 
-  // ── Check backend for in-progress attempt (break/resume) ─────────────────
-  async function checkForActiveAttempt(userId: string) {
+  // ── Check all in-progress attempts for all sections ──────────────────────
+  async function checkForActiveSessions(userId: string) {
     try {
-      const active = await getActiveAttempt(userId, "junior");
-      if (!active) { setSavedBreak(null); return; }
-      const answers = await getAttemptAnswers(active.id);
-      if (!answers.length) { setSavedBreak(null); return; }
-      const rawSection = answers[0].section;
-      const section = (rawSection === "All" ? "A" : rawSection) as Section;
-      const totalMap: Record<Section, number> = { A: 28, B: 13, C: 14, All: 55 };
-      setCurrentAttemptId(active.id);
-      setSavedBreak({
-        attemptId: active.id,
-        section,
-        currentQuestionIndex: answers.length,
-        answers: answers.map((a) => ({
-          id: a.question_id,
-          question: "",
-          isCorrect: !!a.ai_grade,
-          feedback: "",
-          correctAnswer: "",
-        })),
-        totalQuestions: totalMap[section] ?? 28,
-      });
+      const sessions = await getActiveAttempts(userId, "junior");
+      const map: Record<string, { attemptId: string; answeredCount: number }> = {};
+      for (const s of sessions) {
+        map[s.section] = { attemptId: s.attemptId, answeredCount: s.answeredCount };
+      }
+      setActiveSessions(map);
     } catch {
-      setSavedBreak(null);
+      setActiveSessions({});
     }
   }
 
-  // Refresh progress, sections and in-progress break after returning to start screen
+  // Refresh progress, sections and active sessions after returning to start screen
   useEffect(() => {
     if (screen === "start" && user) {
       getUserProgress(user.id, "junior").then(setProgressData);
       getCompletedSections(user.id, "junior").then(setCompletedSections);
       getSectionProgress(user.id, "junior").then(setSectionProgress);
-      checkForActiveAttempt(user.id);
+      checkForActiveSessions(user.id);
     }
   }, [screen, user?.id]);
 
@@ -226,30 +203,40 @@ export default function Index() {
     window.location.replace("/login");
   };
 
-  // ── Resume from break ────────────────────────────────────────────────────
-  const handleResume = () => {
-    if (!savedBreak) return;
-    setSelectedSection(savedBreak.section);
-    setCurrentQ(savedBreak.currentQuestionIndex);
+  // ── Resume a specific section's in-progress attempt ───────────────────────
+  const handleResumeSection = (section: Section) => {
+    const session = activeSessions[section];
+    if (!session) return;
+    setCurrentAttemptId(session.attemptId);
+    setSelectedSection(section);
+    setCurrentQ(session.answeredCount);
+    setSessionResults([]);
     setTestMode(false);
     resetGrading();
-    setSavedBreak(null);
+    setActiveSessions((prev) => { const next = { ...prev }; delete next[section]; return next; });
     setScreen("quiz");
   };
 
-  const handleDiscardBreak = () => {
-    // Complete the in-progress attempt so it doesn't reappear
-    if (savedBreak?.attemptId) {
-      completeAttempt(savedBreak.attemptId, quizConfig).catch(() => {});
+  // ── Discard a section's in-progress attempt and start fresh ──────────────
+  const handleDiscardAndStart = (section: Section) => {
+    const session = activeSessions[section];
+    if (session) completeAttempt(session.attemptId, quizConfig).catch(() => {});
+    setActiveSessions((prev) => { const next = { ...prev }; delete next[section]; return next; });
+    setSelectedSection(section);
+    setTestMode(false);
+    setSessionResults([]);
+    setCurrentQ(0);
+    resetGrading();
+    setScreen("quiz");
+    if (user) {
+      startAttempt(user.id, "junior")
+        .then((id) => setCurrentAttemptId(id))
+        .catch(() => setCurrentAttemptId(null));
     }
-    setCurrentAttemptId(null);
-    setSavedBreak(null);
   };
 
   // ── Take a break ─────────────────────────────────────────────────────────
   const handleBreak = () => {
-    // Answers are already saved to the backend per question — just go to start.
-    // The start screen useEffect will re-check the backend and restore the resume card.
     toast.success(t.breakSaved);
     setSessionResults([]);
     setCurrentQ(0);
@@ -259,9 +246,8 @@ export default function Index() {
 
   // ── Section selection → start quiz ───────────────────────────────────────
   const handleSectionStart = (section: Section, isTestMode = false) => {
-    // Resume the in-progress attempt instead of starting fresh
-    if (!isTestMode && savedBreak?.section === section) {
-      handleResume();
+    if (!isTestMode && activeSessions[section]) {
+      handleResumeSection(section);
       return;
     }
     setSelectedSection(section);
@@ -269,9 +255,7 @@ export default function Index() {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
-    setScreen("quiz"); // switch immediately — don't wait for backend
-
-    // Start a backend attempt in the background (non-blocking)
+    setScreen("quiz");
     if (user) {
       startAttempt(user.id, "junior")
         .then((attemptId) => setCurrentAttemptId(attemptId))
@@ -406,7 +390,7 @@ export default function Index() {
     setJustEarned(null);
     setTestMode(false);
     setCurrentAttemptId(null);
-    setSavedBreak(null); // start screen useEffect will re-check backend
+    setActiveSessions({});
     setScreen("start");
   };
 
@@ -420,7 +404,7 @@ export default function Index() {
         <QuizHeader lang={lang} onLangChange={setLang} />
 
         {/* ── Title + tabs (start / leaderboard) ── */}
-        {(screen === "start" || screen === "leaderboard" || screen === "section") && (
+        {(screen === "start" || screen === "leaderboard") && (
           <div className="mb-6">
             <div className="flex items-start justify-between">
               <div>
@@ -449,7 +433,7 @@ export default function Index() {
           </div>
         )}
 
-        {(screen === "start" || screen === "leaderboard" || screen === "section") && (
+        {(screen === "start" || screen === "leaderboard") && (
           <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5 mb-6">
             <button
               className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
@@ -501,37 +485,9 @@ export default function Index() {
               </div>
             </div>
 
-            {/* Saved break resume card */}
-            {savedBreak && (
-              <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 mb-4">
-                <div className="text-sm font-bold text-foreground mb-1">{t.savedSession}</div>
-                <div className="text-xs text-muted-foreground mb-3">
-                  {t.savedSessionDetail(
-                    savedBreak.section,
-                    savedBreak.currentQuestionIndex + 1,
-                    savedBreak.totalQuestions,
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    className="flex-1 bg-gradient-to-r from-primary to-primary/80 rounded-lg text-primary-foreground text-xs font-bold py-2.5 hover:brightness-110 transition-all"
-                    onClick={handleResume}
-                  >
-                    {t.resumeSession}
-                  </button>
-                  <button
-                    className="flex-1 border border-border rounded-lg text-muted-foreground text-xs font-semibold py-2.5 hover:border-muted-foreground/30 transition-all"
-                    onClick={handleDiscardBreak}
-                  >
-                    {t.discardSession}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Progress block */}
+            {/* Progress block with interactive section cards */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
-              <div className="flex justify-between items-center mb-2.5">
+              <div className="flex justify-between items-center mb-3">
                 <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
                   {lang === "es" ? "Tu progreso" : "Your Progress"}
                 </span>
@@ -539,30 +495,75 @@ export default function Index() {
                   {completedSections.size}/3 {lang === "es" ? "secciones" : "sections"}
                 </span>
               </div>
-              <div className="flex gap-2 mb-2.5">
+
+              <div className="flex flex-col gap-2 mb-3">
                 {(["A", "B", "C"] as const).map((sec) => {
                   const done = completedSections.has(sec);
+                  const session = activeSessions[sec];
+                  const isResume = !done && !!session;
                   const total = sectionCounts[sec] ?? 1;
                   const answered = Math.min(sectionProgress[sec], total);
                   const pct = Math.round((answered / total) * 100);
+                  const sectionLabels: Record<string, { title: string; desc: string }> = {
+                    A: { title: lang === "es" ? "Sección A" : "Section A", desc: lang === "es" ? "Operación diaria y producto" : "Daily operations & product" },
+                    B: { title: lang === "es" ? "Sección B" : "Section B", desc: lang === "es" ? "Herramientas del día a día" : "Daily tools (Acordeón)" },
+                    C: { title: lang === "es" ? "Sección C" : "Section C", desc: lang === "es" ? "Plataformas (CORAA, ODS)" : "Platforms (CORAA, ODS)" },
+                  };
                   return (
                     <div
                       key={sec}
-                      className={`flex-1 relative rounded-lg py-1.5 text-center text-[11px] font-bold border transition-all overflow-hidden ${
-                        done
-                          ? "bg-success/10 border-success/30 text-success"
-                          : "bg-secondary/40 border-border/50 text-muted-foreground/50"
+                      className={`rounded-xl border overflow-hidden transition-all ${
+                        isResume
+                          ? "bg-primary/8 border-primary/40"
+                          : done
+                            ? "bg-success/5 border-success/20"
+                            : "bg-secondary/40 border-border/50"
                       }`}
                     >
-                      {done ? `✓ Sec. ${sec}` : `Sec. ${sec}`}
-                      <div
-                        className={`absolute bottom-0 left-0 h-0.5 transition-all duration-500 ${done ? "bg-success/60" : "bg-primary/50"}`}
-                        style={{ width: `${pct}%` }}
-                      />
+                      <button
+                        className="w-full p-3 text-left hover:brightness-110 transition-all"
+                        onClick={() => handleSectionStart(sec)}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <div className={`text-xs font-bold ${isResume ? "text-primary" : done ? "text-success" : "text-foreground"}`}>
+                            {done ? "✓ " : ""}{sectionLabels[sec].title}
+                          </div>
+                          <div className={`text-xs font-bold tabular-nums ${isResume ? "text-primary/60" : done ? "text-success/50" : "text-muted-foreground/40"}`}>
+                            {total} {lang === "es" ? "pregs." : "qs."}
+                          </div>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground/60 mb-2">
+                          {isResume
+                            ? (lang === "es" ? `Continuar desde pregunta ${session.answeredCount + 1}` : `Resume from question ${session.answeredCount + 1}`)
+                            : done
+                              ? (lang === "es" ? "Completada · Haz clic para repetir" : "Completed · Click to retake")
+                              : sectionLabels[sec].desc}
+                        </div>
+                        <div className="h-1 bg-secondary/60 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${done ? "bg-success/70" : isResume ? "bg-primary" : "bg-primary/40"}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className={`text-[10px] mt-1 ${isResume ? "text-primary/60" : done ? "text-success/50" : "text-muted-foreground/40"}`}>
+                          {answered}/{total} {lang === "es" ? "respondidas" : "answered"}
+                        </div>
+                      </button>
+                      {isResume && (
+                        <div className="px-3 pb-2">
+                          <button
+                            className="text-[10px] text-muted-foreground/40 hover:text-destructive/60 transition-colors"
+                            onClick={() => handleDiscardAndStart(sec)}
+                          >
+                            ↩ {lang === "es" ? "Empezar de nuevo" : "Start over"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
+
               <div className="text-[10px] text-muted-foreground/50">
                 {progressData
                   ? `${progressData.correct}/${progressData.total}`
@@ -571,104 +572,7 @@ export default function Index() {
               </div>
             </div>
 
-<div className="text-xs text-muted-foreground/40 text-center mb-3.5">{t.passThreshold}</div>
-
-            <button
-              className="w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-[15px] font-bold py-3.5 tracking-wide hover:brightness-110 transition-all"
-              onClick={() => setScreen("section")}
-            >
-              {lang === "es" ? "Seleccionar Sección →" : "Select Section →"}
-            </button>
-          </div>
-        )}
-
-        {/* ── SECTION PICKER ── */}
-        {screen === "section" && (
-          <div>
-            <div className="mb-6">
-              <div className="flex items-center gap-2 mb-1 flex-wrap">
-                <span className="text-base font-bold text-foreground">{displayName}</span>
-                {[...earnedTiers].map((tier) => <TierBadge key={tier} tier={tier} />)}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {lang === "es" ? "Elige una sección para comenzar" : "Choose a section to begin"}
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 mb-4">
-              {(["A", "B", "C"] as Section[]).map((sec) => {
-                const labels: Record<Section, { title: string; desc: string }> = {
-                  A: {
-                    title: lang === "es" ? "Sección A" : "Section A",
-                    desc: lang === "es" ? "Operación diaria y producto" : "Daily operations & product",
-                  },
-                  B: {
-                    title: lang === "es" ? "Sección B" : "Section B",
-                    desc: lang === "es" ? "Herramientas del día a día (Acordeón)" : "Daily tools (Acordeón)",
-                  },
-                  C: {
-                    title: lang === "es" ? "Sección C" : "Section C",
-                    desc: lang === "es" ? "Plataformas (CORAA, ODS)" : "Platforms (CORAA, ODS)",
-                  },
-                  All: { title: "All", desc: "" },
-                };
-                const count = sec === "A" ? sectionCounts.A : sec === "B" ? sectionCounts.B : sectionCounts.C;
-                const isDone = completedSections.has(sec);
-                const isResume = !isDone && savedBreak?.section === sec;
-                const answered = Math.min(sectionProgress[sec], count);
-                const pct = count > 0 ? Math.round((answered / count) * 100) : 0;
-                return (
-                  <button
-                    key={sec}
-                    className={`w-full rounded-xl p-4 text-left transition-all group border ${
-                      isDone
-                        ? "bg-success/5 border-success/30 hover:border-success/50 hover:bg-success/10"
-                        : "bg-secondary/40 border-border hover:border-primary/40 hover:bg-primary/5"
-                    }`}
-                    onClick={() => handleSectionStart(sec, false)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className={`font-bold text-sm transition-colors ${isDone ? "text-success group-hover:text-success" : "text-foreground group-hover:text-primary"}`}>
-                          {isDone && "✓ "}{labels[sec].title}
-                        </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {isDone
-                            ? (lang === "es" ? "Completada · Puedes repetirla" : "Completed · Can retake")
-                            : isResume
-                              ? (lang === "es" ? `Continuar desde pregunta ${savedBreak!.currentQuestionIndex + 1}` : `Resume from question ${savedBreak!.currentQuestionIndex + 1}`)
-                              : labels[sec].desc}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className={`text-lg font-extrabold transition-colors ${isDone ? "text-success/60 group-hover:text-success" : "text-primary/60 group-hover:text-primary"}`}>
-                          {count}
-                        </div>
-                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
-                          {lang === "es" ? "preguntas" : "questions"}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="mt-2.5 h-1.5 bg-secondary/60 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-success/70" : "bg-primary/60"}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className={`text-[10px] mt-1 ${isDone ? "text-success/60" : "text-muted-foreground/50"}`}>
-                      {answered}/{count} {lang === "es" ? "respondidas" : "answered"}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <button
-              className="w-full bg-transparent border border-border rounded-xl text-muted-foreground text-sm font-semibold py-3 hover:border-muted-foreground/30 transition-all"
-              onClick={() => setScreen("start")}
-            >
-              ← {lang === "es" ? "Volver" : "Back"}
-            </button>
+            <div className="text-xs text-muted-foreground/40 text-center">{t.passThreshold}</div>
           </div>
         )}
 
