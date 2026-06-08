@@ -49,16 +49,26 @@ CORS is handled in Lambda code only. Never enable CORS in AWS Function URL setti
 - ✅ FIXED: handleResume crash — savedBreak.answers didn't exist on SavedBreak type
 - ✅ FIXED: GET /attempts/:id/answers missing from Lambda — deployed June 8
 - ✅ FIXED: Cross-device break/resume working — "Tienes una sesión guardada" card appears correctly
-- 🔴 Section buttons (Sec.A / Sec.B / Sec.C) show no progress — need visual progress bar per section based on answers completed vs total (A=28, B=13, C=14)
+- ✅ FIXED: Section progress bars — Sec.A/B/C now show visual fill + "X/N respondidas" count
+- ✅ FIXED: Resume from section picker — clicking a section with saved progress resumes at correct question
+- ✅ FIXED: Multiple in-progress sessions — home screen now shows ALL sections with saved progress simultaneously; removed separate saved-session card; sections are clickable cards with inline "Empezar de nuevo" option
+- ✅ FIXED: Highest-answered attempt wins per section — getActiveAttempts orders by answer count DESC and frontend keeps first result per section
 - 🔴 "0/0 respuestas correctas acumuladas" not pulling from RDS — needs to call getUserProgress and display real numbers
 - 🔴 AI coaching shows "Error al conectar con el servidor de evaluación" — CORS OPTIONS handler missing in ldk-quiz-grader Lambda
 - 🔴 No pause button visible during active quiz session
 
+## Home screen architecture (as of June 8, 2026)
+- Section A/B/C are interactive cards in the "Tu Progreso" block — no separate section picker screen
+- In-progress sections: highlighted cyan border, "Continuar desde pregunta X", inline "↩ Empezar de nuevo"
+- Completed sections: green ✓, "Completada · Haz clic para repetir"
+- Not started: neutral, click starts immediately
+- Backend: `GET /users/:id/active-attempts` returns all in-progress attempts with answer counts per section
+- Frontend: `activeSessions: Record<section, { attemptId, answeredCount }>` — keeps the attempt with most answers per section
+
 ## Next session priorities (in order)
-1. Fix section progress bars — visual fill on Sec.A/B/C buttons showing % complete
-2. Fix "respuestas correctas acumuladas" counter — wire to getUserProgress from RDS
-3. Fix AI coaching CORS error — add OPTIONS handler to ldk-quiz-grader
-4. Add pause button to quiz UI
+1. Fix "respuestas correctas acumuladas" counter — wire to getUserProgress from RDS
+2. Fix AI coaching CORS error — add OPTIONS handler to ldk-quiz-grader Lambda
+3. Add pause button to quiz UI
 
 ## What NOT to do
 - Do not edit root-level .tsx files — they are dead drafts
