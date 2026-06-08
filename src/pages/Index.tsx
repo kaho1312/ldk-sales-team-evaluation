@@ -229,6 +229,7 @@ export default function Index() {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
+    setCurrentAttemptId(null);
     setScreen("quiz");
     if (user) {
       startAttempt(user.id, "junior")
@@ -257,6 +258,7 @@ export default function Index() {
     setSessionResults([]);
     setCurrentQ(0);
     resetGrading();
+    setCurrentAttemptId(null);
     setScreen("quiz");
     if (user) {
       startAttempt(user.id, "junior")
@@ -340,6 +342,16 @@ export default function Index() {
       setCorrectAnswer("");
       setGraded(true);
       setGrading(false);
+      if (currentAttemptId) {
+        saveAnswerToAttempt(
+          currentAttemptId,
+          q.id,
+          q.section,
+          answer,
+          false,
+          errorFeedback,
+        ).catch(() => {});
+      }
       setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: false, feedback: errorFeedback, correctAnswer: "" }]);
     }
   };
@@ -397,8 +409,8 @@ export default function Index() {
   };
 
   // Backend progress for the results screen (reload after attempt)
-  const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct.length);
-  const liveTotal = progressData?.total ?? 55;
+  const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct?.length ?? 0);
+  const liveTotal = progressData?.total || 55;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
