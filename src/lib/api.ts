@@ -251,6 +251,16 @@ export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
 
 // ── Completed sections ────────────────────────────────────────────────────────
 
+export async function getSectionProgress(
+  userId: string,
+  tier: string,
+): Promise<{ A: number; B: number; C: number }> {
+  return apiFetch<{ A: number; B: number; C: number }>(
+    `/users/${userId}/section-progress`,
+    { query: { tier } },
+  );
+}
+
 export async function getCompletedSections(userId: string, tier: string): Promise<Set<string>> {
   const sections = await apiFetch<string[]>(`/users/${userId}/completed-sections`, {
     query: { tier },

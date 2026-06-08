@@ -26,6 +26,7 @@ import {
   getActiveAttempt,
   getAttemptAnswers,
   getCompletedSections,
+  getSectionProgress,
 } from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -113,6 +114,7 @@ export default function Index() {
 
   // Backend progress (async, replaces localStorage progress bar)
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
+  const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
 
   // Local progress (fast, shown while backend loads)
   const localAgentProgress = getAgentProgress(agentKey);
@@ -163,8 +165,9 @@ export default function Index() {
     // Load progress from backend
     getUserProgress(user.id, "junior").then(setProgressData);
 
-    // Load completed sections
+    // Load completed sections + per-section progress
     getCompletedSections(user.id, "junior").then(setCompletedSections);
+    getSectionProgress(user.id, "junior").then(setSectionProgress);
 
     // Load quiz config
     getActiveConfig("junior").then((config) => {
@@ -212,6 +215,7 @@ export default function Index() {
     if (screen === "start" && user) {
       getUserProgress(user.id, "junior").then(setProgressData);
       getCompletedSections(user.id, "junior").then(setCompletedSections);
+      getSectionProgress(user.id, "junior").then(setSectionProgress);
       checkForActiveAttempt(user.id);
     }
   }, [screen, user?.id]);
@@ -227,7 +231,6 @@ export default function Index() {
     if (!savedBreak) return;
     setSelectedSection(savedBreak.section);
     setCurrentQ(savedBreak.currentQuestionIndex);
-    setSessionResults(savedBreak.answers);
     setTestMode(false);
     resetGrading();
     setSavedBreak(null);
@@ -534,16 +537,23 @@ export default function Index() {
               <div className="flex gap-2 mb-2.5">
                 {(["A", "B", "C"] as const).map((sec) => {
                   const done = completedSections.has(sec);
+                  const total = sectionCounts[sec] ?? 1;
+                  const answered = Math.min(sectionProgress[sec], total);
+                  const pct = Math.round((answered / total) * 100);
                   return (
                     <div
                       key={sec}
-                      className={`flex-1 rounded-lg py-1.5 text-center text-[11px] font-bold border transition-all ${
+                      className={`flex-1 relative rounded-lg py-1.5 text-center text-[11px] font-bold border transition-all overflow-hidden ${
                         done
                           ? "bg-success/10 border-success/30 text-success"
                           : "bg-secondary/40 border-border/50 text-muted-foreground/50"
                       }`}
                     >
-                      {done ? `✓ ${lang === "es" ? "Sec" : "Sec"}. ${sec}` : `Sec. ${sec}`}
+                      {done ? `✓ Sec. ${sec}` : `Sec. ${sec}`}
+                      <div
+                        className={`absolute bottom-0 left-0 h-0.5 transition-all duration-500 ${done ? "bg-success/60" : "bg-primary/50"}`}
+                        style={{ width: `${pct}%` }}
+                      />
                     </div>
                   );
                 })}
@@ -599,6 +609,8 @@ export default function Index() {
                 };
                 const count = sec === "A" ? sectionCounts.A : sec === "B" ? sectionCounts.B : sectionCounts.C;
                 const isDone = completedSections.has(sec);
+                const answered = Math.min(sectionProgress[sec], count);
+                const pct = count > 0 ? Math.round((answered / count) * 100) : 0;
                 return (
                   <button
                     key={sec}
@@ -628,6 +640,15 @@ export default function Index() {
                           {lang === "es" ? "preguntas" : "questions"}
                         </div>
                       </div>
+                    </div>
+                    <div className="mt-2.5 h-1.5 bg-secondary/60 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${isDone ? "bg-success/70" : "bg-primary/60"}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <div className={`text-[10px] mt-1 ${isDone ? "text-success/60" : "text-muted-foreground/50"}`}>
+                      {answered}/{count} {lang === "es" ? "respondidas" : "answered"}
                     </div>
                   </button>
                 );
