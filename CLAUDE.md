@@ -47,15 +47,24 @@ CORS is handled in Lambda code only. Never enable CORS in AWS Function URL setti
 
 ## Current known bugs (updated June 8, 2026)
 - ✅ FIXED: handleResume crash — savedBreak.answers didn't exist on SavedBreak type
-- ✅ FIXED: GET /attempts/:id/answers missing from Lambda — deployed June 8
-- ✅ FIXED: Cross-device break/resume working — "Tienes una sesión guardada" card appears correctly
+- ✅ FIXED: GET /attempts/:id/answers missing from Lambda
+- ✅ FIXED: Cross-device break/resume — "Tienes una sesión guardada" card appears correctly
 - ✅ FIXED: Section progress bars — Sec.A/B/C now show visual fill + "X/N respondidas" count
 - ✅ FIXED: Resume from section picker — clicking a section with saved progress resumes at correct question
-- ✅ FIXED: Multiple in-progress sessions — home screen now shows ALL sections with saved progress simultaneously; removed separate saved-session card; sections are clickable cards with inline "Empezar de nuevo" option
-- ✅ FIXED: Highest-answered attempt wins per section — getActiveAttempts orders by answer count DESC and frontend keeps first result per section
-- 🔴 "0/0 respuestas correctas acumuladas" not pulling from RDS — needs to call getUserProgress and display real numbers
+- ✅ FIXED: Multiple in-progress sessions — home screen shows ALL sections with saved progress simultaneously
+- ✅ FIXED: Highest-answered attempt wins per section — getActiveAttempts orders by answer count DESC
 - ✅ FIXED: AI coaching CORS error — OPTIONS handler added to ldk-quiz-grader Lambda
 - ✅ FIXED: Pause button now visible during active quiz session
+- ✅ FIXED: Only 7/28 answers saved to RDS — saveAnswerToAttempt now called in grader catch block
+- ✅ FIXED: NaN% score on results — liveTotal used ?? instead of || causing 0/0 on first load
+- ✅ FIXED: Results screen showed red ✗ mid-quiz — motivational until all 3 sections done; pass/fail only evaluated when allSectionsDone
+- ✅ FIXED: completeAttempt used 55 as total_questions for all sections — now uses sessionQuestions.length per section
+- ✅ FIXED: getUserProgress returned 0 — now SUMs from answers table across passed+failed attempts
+- ✅ FIXED: CORRECTAS showed partial session count (e.g. 6 instead of 12) — now uses result.total_correct from completeAttempt backend response
+- ✅ FIXED: PREGUNTAS A REPASAR showed only current-session wrong answers — new GET /users/:id/wrong-answers route; all sections fetched from RDS when quiz complete; expanded card shows full question text
+- ✅ FIXED: Leaderboard showed last section score only (12/13) — now counts DISTINCT correct question_ids from answers table; total hardcoded to 55
+- ✅ FIXED: Leaderboard badge showed "CERTIFICADA" only — now shows ★ JUNIOR (tier name)
+- ✅ FIXED: "0/0 respuestas correctas acumuladas" on home screen — wired to getUserProgress from RDS
 
 ## Home screen architecture (as of June 8, 2026)
 - Section A/B/C are interactive cards in the "Tu Progreso" block — no separate section picker screen
@@ -66,7 +75,10 @@ CORS is handled in Lambda code only. Never enable CORS in AWS Function URL setti
 - Frontend: `activeSessions: Record<section, { attemptId, answeredCount }>` — keeps the attempt with most answers per section
 
 ## Next session priorities (in order)
-1. Fix "respuestas correctas acumuladas" counter — wire to getUserProgress from RDS
+1. Admin panel — grant admin status to Fernanda Salas and Kay Honig via DB or admin route
+2. Admin panel — human review of wrong/failed answers: admin can override AI grade on any answer
+3. Admin panel — question upload interface: add/edit/delete Junior questions without touching code
+4. Admin panel — general hardening: role-guard routes, audit log of overrides
 
 ## What NOT to do
 - Do not edit root-level .tsx files — they are dead drafts
