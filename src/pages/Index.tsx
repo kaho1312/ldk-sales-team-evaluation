@@ -107,6 +107,7 @@ export default function Index() {
   // Backend progress (async, replaces localStorage progress bar)
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
   const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
+  const [sectionStats, setSectionStats] = useState<{ correct: number; scorePercent: number } | null>(null);
 
   // Local progress (fast, shown while backend loads)
   const localAgentProgress = getAgentProgress(agentKey);
@@ -367,6 +368,8 @@ export default function Index() {
             total_questions: sessionQuestions.length,
             passing_threshold: quizConfig.passing_threshold,
           });
+          // Store backend-authoritative section stats for the results display
+          setSectionStats({ correct: result.total_correct, scorePercent: result.score_percent });
           // Mark this section done and compute whether all 3 are now complete
           setCompletedSections((prev) => new Set([...prev, selectedSection!]));
           const sectionsDone = completedSections.has(selectedSection!)
@@ -418,6 +421,7 @@ export default function Index() {
     setTestMode(false);
     setCurrentAttemptId(null);
     setActiveSessions({});
+    setSectionStats(null);
     setScreen("start");
   };
 
@@ -641,6 +645,8 @@ export default function Index() {
             cumulativeTotal={liveTotal}
             justEarned={!!justEarned}
             allSectionsDone={allSectionsDone}
+            sectionCorrect={sectionStats?.correct}
+            sectionScorePercent={sectionStats?.scorePercent}
             onRestart={handleRestart}
           />
         )}

@@ -20,6 +20,8 @@ interface QuizResultsProps {
   cumulativeTotal: number;
   justEarned: boolean;
   allSectionsDone: boolean;
+  sectionCorrect?: number;
+  sectionScorePercent?: number;
   onRestart: () => void;
 }
 
@@ -73,12 +75,17 @@ export function QuizResults({
   cumulativeTotal,
   justEarned,
   allSectionsDone,
+  sectionCorrect,
+  sectionScorePercent,
   onRestart,
 }: QuizResultsProps) {
   const t = LANG[lang];
   const correctCount = results.filter((r) => r.isCorrect).length;
   const wrongCount = results.filter((r) => !r.isCorrect).length;
-  const finalScore = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+  // Use backend-authoritative values when available (handles resume where sessionResults is partial)
+  const displayCorrect = sectionCorrect ?? correctCount;
+  const displayWrong = sectionCorrect !== undefined ? totalQuestions - sectionCorrect : wrongCount;
+  const finalScore = sectionScorePercent ?? (totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0);
   const cumulativeScore = cumulativeTotal > 0 ? Math.round((cumulativeCorrect / cumulativeTotal) * 100) : 0;
   const passed = allSectionsDone && cumulativeScore >= 90;
 
@@ -179,11 +186,11 @@ export function QuizResults({
       {/* Stats row */}
       <div className="flex gap-2.5 mb-5">
         <div className="flex-1 bg-secondary/40 border border-border rounded-xl p-3.5 text-center">
-          <div className="text-2xl font-extrabold text-success mb-1">{correctCount}</div>
+          <div className="text-2xl font-extrabold text-success mb-1">{displayCorrect}</div>
           <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">{t.correct_count}</div>
         </div>
         <div className="flex-1 bg-secondary/40 border border-border rounded-xl p-3.5 text-center">
-          <div className="text-2xl font-extrabold text-destructive mb-1">{wrongCount}</div>
+          <div className="text-2xl font-extrabold text-destructive mb-1">{displayWrong}</div>
           <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">{t.wrong_count}</div>
         </div>
         <div className="flex-1 bg-secondary/40 border border-border rounded-xl p-3.5 text-center">
@@ -200,7 +207,7 @@ export function QuizResults({
       </div>
 
       {/* Wrong questions list with feedback */}
-      {wrongCount > 0 && (
+      {displayWrong > 0 && (
         <div className="mb-5">
           <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2">
             {t.questionsWrong}
