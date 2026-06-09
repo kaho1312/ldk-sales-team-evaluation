@@ -300,11 +300,11 @@ export const handler = async (event) => {
     if (method === 'GET' && seg[0] === 'leaderboard') {
       const [rows] = await conn.query(
         `SELECT u.id, u.full_name,
-          COALESCE(MAX(qa.total_correct), 0) as correct,
-          COALESCE(MAX(qa.total_questions), 0) as total,
+          COALESCE(SUM(COALESCE(qa.total_correct, 0)), 0) as correct,
+          COALESCE(SUM(COALESCE(qa.total_questions, 0)), 0) as total,
           MAX(CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END) as certified
          FROM users u
-         LEFT JOIN quiz_attempts qa ON qa.user_id=u.id AND qa.status='passed'
+         LEFT JOIN quiz_attempts qa ON qa.user_id=u.id AND qa.certification_tier='junior' AND qa.status IN ('passed','failed')
          LEFT JOIN certifications c ON c.user_id=u.id
          GROUP BY u.id, u.full_name
          ORDER BY correct DESC, u.full_name ASC`
