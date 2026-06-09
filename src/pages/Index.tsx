@@ -26,6 +26,7 @@ import {
   getActiveAttempts,
   getCompletedSections,
   getSectionProgress,
+  getWrongAnswers,
 } from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -108,6 +109,7 @@ export default function Index() {
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
   const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
   const [sectionStats, setSectionStats] = useState<{ correct: number; scorePercent: number } | null>(null);
+  const [allWrongReview, setAllWrongReview] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[] | null>(null);
 
   // Local progress (fast, shown while backend loads)
   const localAgentProgress = getAgentProgress(agentKey);
@@ -380,6 +382,23 @@ export default function Index() {
             const updated = await getUserProgress(user.id, "junior");
             setProgressData(updated);
           } catch {}
+          if (sectionsDone) {
+            try {
+              const wrongFromDB = await getWrongAnswers(user.id, "junior");
+              setAllWrongReview(
+                wrongFromDB.map((w) => {
+                  const fq = FALLBACK_QUESTIONS.find((q) => q.id === w.questionId);
+                  return {
+                    id: w.questionId,
+                    question: fq?.question ?? w.questionId,
+                    isCorrect: false,
+                    feedback: w.aiReasoning ?? "",
+                    correctAnswer: "",
+                  };
+                }),
+              );
+            } catch {}
+          }
           if (result.passed && sectionsDone && !earnedTiers.has(activeTier)) {
             await grantCertification(user.id, "junior", currentAttemptId);
             saveEarnedTierLocal(agentKey, activeTier);
@@ -422,6 +441,7 @@ export default function Index() {
     setCurrentAttemptId(null);
     setActiveSessions({});
     setSectionStats(null);
+    setAllWrongReview(null);
     setScreen("start");
   };
 
@@ -647,6 +667,7 @@ export default function Index() {
             allSectionsDone={allSectionsDone}
             sectionCorrect={sectionStats?.correct}
             sectionScorePercent={sectionStats?.scorePercent}
+            allWrongAnswers={allSectionsDone ? (allWrongReview ?? undefined) : undefined}
             onRestart={handleRestart}
           />
         )}

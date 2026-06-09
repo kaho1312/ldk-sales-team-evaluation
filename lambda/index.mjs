@@ -265,6 +265,22 @@ export const handler = async (event) => {
       return ok(rows.map(r => ({ attemptId: r.attempt_id, section: r.section, answeredCount: Number(r.answered_count) })));
     }
 
+    // ── GET /users/:id/wrong-answers ──────────────────────────────────────────
+    if (method === 'GET' && seg[0] === 'users' && seg[2] === 'wrong-answers') {
+      const tier = (q.tier || 'junior').toLowerCase();
+      const [rows] = await conn.query(
+        `SELECT a.question_id AS questionId, a.section, a.user_answer AS userAnswer, a.ai_reasoning AS aiReasoning
+         FROM answers a
+         JOIN quiz_attempts qa ON qa.id = a.attempt_id
+         WHERE qa.user_id = ? AND qa.certification_tier = ?
+           AND qa.status IN ('passed', 'failed')
+           AND COALESCE(a.final_grade, a.ai_grade) = 0
+         ORDER BY a.section, a.question_id`,
+        [seg[1], tier]
+      );
+      return ok(rows);
+    }
+
     // ── GET /users/:id/section-progress ────────────────────────────────────────
     if (method === 'GET' && seg[0] === 'users' && seg[2] === 'section-progress') {
       const tier = (q.tier || 'junior').toLowerCase();

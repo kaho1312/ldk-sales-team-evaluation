@@ -249,6 +249,19 @@ export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
   return apiFetch<LeaderboardEntry[]>("/leaderboard");
 }
 
+// ── Wrong answers across all completed section attempts ───────────────────────
+
+export interface WrongAnswer {
+  questionId: string;
+  section: string;
+  userAnswer: string;
+  aiReasoning: string | null;
+}
+
+export async function getWrongAnswers(userId: string, tier: string): Promise<WrongAnswer[]> {
+  return apiFetch<WrongAnswer[]>(`/users/${userId}/wrong-answers`, { query: { tier } });
+}
+
 // ── Active in-progress attempts (all sections simultaneously) ─────────────────
 
 export interface ActiveAttemptInfo {

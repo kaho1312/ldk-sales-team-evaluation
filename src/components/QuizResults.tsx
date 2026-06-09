@@ -22,6 +22,7 @@ interface QuizResultsProps {
   allSectionsDone: boolean;
   sectionCorrect?: number;
   sectionScorePercent?: number;
+  allWrongAnswers?: QuizResult[];
   onRestart: () => void;
 }
 
@@ -40,6 +41,7 @@ function AnswerReviewCard({ result, lang }: { result: QuizResult; lang: Lang }) 
       </button>
       {open && (
         <div className="border-t border-destructive/10 px-3 py-2.5 space-y-2">
+          <div className="text-xs text-foreground/70 leading-relaxed">{result.question}</div>
           {result.feedback && (
             <div>
               <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
@@ -77,6 +79,7 @@ export function QuizResults({
   allSectionsDone,
   sectionCorrect,
   sectionScorePercent,
+  allWrongAnswers,
   onRestart,
 }: QuizResultsProps) {
   const t = LANG[lang];
@@ -85,6 +88,8 @@ export function QuizResults({
   // Use backend-authoritative values when available (handles resume where sessionResults is partial)
   const displayCorrect = sectionCorrect ?? correctCount;
   const displayWrong = sectionCorrect !== undefined ? totalQuestions - sectionCorrect : wrongCount;
+  // When all sections are done, use full RDS wrong-answer list; otherwise use current session
+  const reviewList = allSectionsDone && allWrongAnswers ? allWrongAnswers : results.filter((r) => !r.isCorrect);
   const finalScore = sectionScorePercent ?? (totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0);
   const cumulativeScore = cumulativeTotal > 0 ? Math.round((cumulativeCorrect / cumulativeTotal) * 100) : 0;
   const passed = allSectionsDone && cumulativeScore >= 90;
@@ -207,16 +212,14 @@ export function QuizResults({
       </div>
 
       {/* Wrong questions list with feedback */}
-      {displayWrong > 0 && (
+      {reviewList.length > 0 && (
         <div className="mb-5">
           <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2">
             {t.questionsWrong}
           </div>
-          {results
-            .filter((r) => !r.isCorrect)
-            .map((r) => (
-              <AnswerReviewCard key={r.id} result={r} lang={lang} />
-            ))}
+          {reviewList.map((r) => (
+            <AnswerReviewCard key={r.id} result={r} lang={lang} />
+          ))}
         </div>
       )}
 
