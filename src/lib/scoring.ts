@@ -8,10 +8,31 @@
 //      e.g. floor(55 * 0.10) = 5 → any section with 6+ errors = fail
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Total questions in the Junior tier (Section A: 28, B: 13, C: 14).
+// Used by the results screen for certification-progress (% of 55) calculations.
+export const JUNIOR_TOTAL_QUESTIONS = 55;
+
 export interface SectionErrors {
   A: number;
   B: number;
   C: number;
+}
+
+// Cumulative certification status across ALL of a user's completed attempts for a
+// tier (returned by the backend on complete/override and by GET /cert-status).
+// Distinct from a single section's pass/fail.
+export interface CertStatus {
+  correct: number;
+  total_questions: number;
+  section_errors: SectionErrors;
+  // Deduped per-section counts (distinct questions) — authoritative source for the
+  // results-screen "Progreso general" rows; absent from an older backend.
+  section_correct?: SectionErrors;
+  section_answered?: SectionErrors;
+  passed: boolean;
+  fail_reasons: string[];
+  certified: boolean;
+  newlyGranted?: boolean;
 }
 
 export interface ScoreResult {
@@ -21,6 +42,8 @@ export interface ScoreResult {
   section_errors: SectionErrors;
   passed: boolean;
   fail_reasons: string[];
+  // Present on backend complete/override responses; absent on local calculateScore().
+  cert?: CertStatus | null;
 }
 
 export function calculateScore(

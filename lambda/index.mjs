@@ -87,12 +87,97 @@ function calcScore(answers, totalQuestions, passingThreshold = 0.9) {
   return { correct, pct, errs, passed: reasons.length === 0, reasons };
 }
 
+// ── Cumulative certification eligibility ───────────────────────────────────────
+// A tier is earned by cumulative performance across ALL of a user's completed
+// attempts, NOT by any single section attempt (a single section maxes out at 28
+// questions, so it can never reach 50/55). A question counts as correct if ANY
+// attempt graded it correct — best-grade-wins via MAX(final_grade) over distinct
+// question_ids — which naturally tolerates retakes and discarded partial attempts.
+//   Pass = correct >= ceil(total*threshold) AND no section with > floor(total*0.1) errors.
+async function certEligibility(conn, userId, tier) {
+  const [cfg] = await conn.query(
+    'SELECT total_questions, passing_threshold FROM quiz_configs WHERE certification_tier = ? AND is_active = 1',
+    [tier]
+  );
+  const totalQuestions = cfg[0]?.total_questions || 55;
+  const threshold = cfg[0]?.passing_threshold != null ? Number(cfg[0].passing_threshold) : 0.9;
+  // Group by question_id ONLY (a question_id uniquely determines its section) so a
+  // single question is never split into two buckets — matches the leaderboard's
+  // COUNT(DISTINCT question_id) convention and is robust to any future section relabel.
+  const [rows] = await conn.query(
+    `SELECT a.question_id, MIN(a.section) AS section, MAX(COALESCE(a.final_grade, 0)) AS best
+       FROM answers a
+       JOIN quiz_attempts qa ON qa.id = a.attempt_id
+      WHERE qa.user_id = ? AND qa.certification_tier = ? AND qa.status IN ('passed','failed')
+      GROUP BY a.question_id`,
+    [userId, tier]
+  );
+  const errs = { A: 0, B: 0, C: 0 };
+  const sectionCorrect = { A: 0, B: 0, C: 0 };
+  const sectionAnswered = { A: 0, B: 0, C: 0 };
+  let correct = 0;
+  for (const r of rows) {
+    const s = r.section === 'All' ? 'A' : r.section;
+    const inSec = s in errs;
+    if (inSec) sectionAnswered[s]++;
+    if (Number(r.best) === 1) { correct++; if (inSec) sectionCorrect[s]++; }
+    else if (inSec) { errs[s]++; }
+  }
+  const minCorrect = Math.ceil(totalQuestions * threshold);
+  const maxErr = Math.floor(totalQuestions * 0.1);
+  const reasons = [];
+  if (correct < minCorrect) reasons.push(`Puntaje general por debajo del umbral (${correct}/${minCorrect} requeridas de ${totalQuestions})`);
+  for (const [s, e] of Object.entries(errs)) if (e > maxErr) reasons.push(`Sección ${s}: ${e} errores (máximo ${maxErr})`);
+  return {
+    correct,
+    total_questions: totalQuestions,
+    section_errors: errs,
+    section_correct: sectionCorrect,
+    section_answered: sectionAnswered,
+    passed: reasons.length === 0,
+    fail_reasons: reasons,
+  };
+}
+
+// Grant the tier cert if cumulatively eligible and not already granted. Grant-only:
+// it never auto-revokes (an admin downgrade requires an explicit DELETE), so a
+// transient dip can't strip a cert. Returns eligibility + { certified, newlyGranted }
+// so the client can reflect the badge and the "just earned" animation.
+async function syncCertification(conn, userId, tier) {
+  const cert = await certEligibility(conn, userId, tier);
+  const [existing] = await conn.query(
+    'SELECT id FROM certifications WHERE user_id = ? AND certification_tier = ?',
+    [userId, tier]
+  );
+  let newlyGranted = false;
+  if (cert.passed && existing.length === 0) {
+    // Insert failure (e.g. transient DB error) must NOT lose the eligibility we just
+    // computed — return certified based on eligibility so the client still reflects it,
+    // and the next /complete or admin override re-attempts the idempotent grant.
+    try {
+      await conn.query(
+        'INSERT INTO certifications (id, user_id, certification_tier, granted_by) VALUES (?,?,?,?) ON DUPLICATE KEY UPDATE granted_at = granted_at',
+        [randomUUID(), userId, tier, 'system']
+      );
+      newlyGranted = true;
+    } catch (e) {
+      console.log('cert insert error:', e.message);
+    }
+  }
+  return { ...cert, certified: cert.passed || existing.length > 0, newlyGranted };
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 export const handler = async (event) => {
   const method = event.httpMethod || event.requestContext?.http?.method || 'GET';
 
   if (method === 'OPTIONS') return { statusCode: 200, headers: CORS, body: '' };
+
+  // ── GET /version — deploy marker (no auth) ─────────────────────────────────
+  if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
+    return ok({ version: 'cumulative-cert-2026-06-09', adminGuardHonorsEmails: true, cumulativeCert: true });
+  }
 
   const rawPath = event.path || event.rawPath || '/';
   const seg = rawPath.replace(/^\//, '').split('/');
@@ -202,9 +287,15 @@ export const handler = async (event) => {
     if (method === 'POST' && seg[0] === 'attempts' && seg[2] === 'complete') {
       const { total_questions, passing_threshold } = body;
       const [answers] = await conn.query('SELECT section, final_grade FROM answers WHERE attempt_id = ?', [seg[1]]);
+      // Per-section score (display only) — uses THIS section's question count, not 55.
       const { correct, pct, errs, passed, reasons } = calcScore(answers, total_questions, passing_threshold);
       await conn.query('UPDATE quiz_attempts SET status=?, total_correct=?, total_questions=?, section_errors=?, score_percent=?, completed_at=NOW() WHERE id=?', [passed ? 'passed' : 'failed', correct, total_questions, JSON.stringify(errs), pct, seg[1]]);
-      return ok({ total_correct: correct, total_questions, score_percent: pct, section_errors: errs, passed, fail_reasons: reasons });
+      // Certification is decided CUMULATIVELY across all the user's completed attempts
+      // (not by this single section). Auto-grant here so a perfect run earns the tier.
+      const [[att]] = await conn.query('SELECT user_id, certification_tier FROM quiz_attempts WHERE id = ?', [seg[1]]);
+      let cert = null;
+      if (att) { try { cert = await syncCertification(conn, att.user_id, att.certification_tier); } catch (e) { console.log('cert sync error:', e.message); } }
+      return ok({ total_correct: correct, total_questions, score_percent: pct, section_errors: errs, passed, fail_reasons: reasons, cert });
     }
 
     // ── GET /users/:id/certifications ──────────────────────────────────────────
@@ -238,6 +329,16 @@ export const handler = async (event) => {
       );
       const [certs] = await conn.query('SELECT id FROM certifications WHERE user_id=? AND certification_tier=?', [seg[1], tier]);
       return ok({ correct: Number(summed[0].correct), total: Number(summed[0].total), certified: certs.length > 0 });
+    }
+
+    // ── GET /users/:id/cert-status ─────────────────────────────────────────────
+    // Authoritative cumulative certification status for a tier (correct vs 55,
+    // per-section errors, pass/fail reasons, and whether the cert row exists).
+    if (method === 'GET' && seg[0] === 'users' && seg[2] === 'cert-status') {
+      const tier = (q.tier || 'junior').toLowerCase();
+      const [existing] = await conn.query('SELECT id FROM certifications WHERE user_id=? AND certification_tier=?', [seg[1], tier]);
+      const cert = await certEligibility(conn, seg[1], tier);
+      return ok({ ...cert, certified: cert.passed || existing.length > 0 });
     }
 
     // ── GET /users/:id/completed-sections ──────────────────────────────────────
@@ -341,8 +442,14 @@ export const handler = async (event) => {
     // ── Admin routes ───────────────────────────────────────────────────────────
 
     if (seg[0] === 'admin') {
-      const [adminCheck] = await conn.query('SELECT is_admin FROM users WHERE id = ?', [claims.sub]);
-      if (!adminCheck[0]?.is_admin) return fail('Forbidden', 403);
+      const [adminCheck] = await conn.query('SELECT is_admin, email FROM users WHERE id = ?', [claims.sub]);
+      const row = adminCheck[0];
+      const isAdmin = !!row && (row.is_admin || ADMIN_EMAILS.has(row.email));
+      if (!isAdmin) return fail('Forbidden', 403);
+      // Self-heal: persist admin flag for hardcoded admins so the DB matches ADMIN_EMAILS.
+      if (row && !row.is_admin && ADMIN_EMAILS.has(row.email)) {
+        await conn.query('UPDATE users SET is_admin = 1 WHERE id = ?', [claims.sub]);
+      }
 
       // GET /admin/users
       if (method === 'GET' && seg[1] === 'users' && !seg[2]) {
@@ -359,6 +466,13 @@ export const handler = async (event) => {
       if (method === 'PUT' && seg[1] === 'users' && seg[3] === 'admin') {
         await conn.query('UPDATE users SET is_admin=? WHERE id=?', [body.isAdmin ? 1 : 0, seg[2]]);
         return ok({ ok: true });
+      }
+
+      // DELETE /admin/users/:id — hard-delete a user (cascades to attempts/answers/certs)
+      if (method === 'DELETE' && seg[1] === 'users' && seg[2] && !seg[3]) {
+        if (seg[2] === claims.sub) return fail('No puedes eliminar tu propia cuenta', 400);
+        const [r] = await conn.query('DELETE FROM users WHERE id = ?', [seg[2]]);
+        return ok({ ok: true, deleted: r.affectedRows });
       }
 
       // GET /admin/attempts (all — no ID)
@@ -381,9 +495,17 @@ export const handler = async (event) => {
         const { override, attemptId, config } = body;
         await conn.query('UPDATE answers SET admin_override=? WHERE id=?', [override === null ? null : (override ? 1 : 0), seg[2]]);
         const [answers] = await conn.query('SELECT section, final_grade FROM answers WHERE attempt_id=?', [attemptId]);
-        const { correct, pct, errs, passed, reasons } = calcScore(answers, config.total_questions, config.passing_threshold);
-        await conn.query('UPDATE quiz_attempts SET status=?, total_correct=?, section_errors=?, score_percent=? WHERE id=?', [passed ? 'passed' : 'failed', correct, JSON.stringify(errs), pct, attemptId]);
-        return ok({ total_correct: correct, total_questions: config.total_questions, score_percent: pct, section_errors: errs, passed, fail_reasons: reasons });
+        const [[attRow]] = await conn.query('SELECT user_id, certification_tier, total_questions FROM quiz_attempts WHERE id=?', [attemptId]);
+        // Score this section against ITS OWN question count, never the 55-question tier
+        // total — otherwise a perfect single section reads ~51% and flips to "failed".
+        const sectionTotal = (attRow && attRow.total_questions) ? attRow.total_questions : answers.length;
+        const threshold = config?.passing_threshold ?? 0.9;
+        const { correct, pct, errs, passed, reasons } = calcScore(answers, sectionTotal, threshold);
+        await conn.query('UPDATE quiz_attempts SET status=?, total_correct=?, total_questions=?, section_errors=?, score_percent=? WHERE id=?', [passed ? 'passed' : 'failed', correct, sectionTotal, JSON.stringify(errs), pct, attemptId]);
+        // Re-evaluate cumulative certification after the override (grant-only).
+        let cert = null;
+        if (attRow) { try { cert = await syncCertification(conn, attRow.user_id, attRow.certification_tier); } catch (e) { console.log('cert sync error:', e.message); } }
+        return ok({ total_correct: correct, total_questions: sectionTotal, score_percent: pct, section_errors: errs, passed, fail_reasons: reasons, cert });
       }
     }
 

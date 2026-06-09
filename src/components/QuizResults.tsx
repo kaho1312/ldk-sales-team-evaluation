@@ -20,10 +20,21 @@ interface QuizResultsProps {
   cumulativeTotal: number;
   justEarned: boolean;
   allSectionsDone: boolean;
+  // Authoritative cumulative certification result from the backend. When present it
+  // decides pass/fail (so the verdict can never contradict the granted badge); the
+  // frontend cumulativeScore is only a fallback for an older backend.
+  certified?: boolean;
   sectionCorrect?: number;
   sectionScorePercent?: number;
+  overallSections?: { section: string; correct: number; total: number }[];
+  certOnTrack?: boolean | null;
   allWrongAnswers?: QuizResult[];
   onRestart: () => void;
+}
+
+// Short section name for the overall-progress rows, e.g. "Sección A" / "Section A"
+function sectionName(sec: string, lang: Lang): string {
+  return lang === "es" ? `Sección ${sec}` : `Section ${sec}`;
 }
 
 function AnswerReviewCard({ result, lang }: { result: QuizResult; lang: Lang }) {
@@ -77,8 +88,11 @@ export function QuizResults({
   cumulativeTotal,
   justEarned,
   allSectionsDone,
+  certified,
   sectionCorrect,
   sectionScorePercent,
+  overallSections,
+  certOnTrack,
   allWrongAnswers,
   onRestart,
 }: QuizResultsProps) {
@@ -92,7 +106,10 @@ export function QuizResults({
   const reviewList = allSectionsDone && allWrongAnswers ? allWrongAnswers : results.filter((r) => !r.isCorrect);
   const finalScore = sectionScorePercent ?? (totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0);
   const cumulativeScore = cumulativeTotal > 0 ? Math.round((cumulativeCorrect / cumulativeTotal) * 100) : 0;
-  const passed = allSectionsDone && cumulativeScore >= 90;
+  // Verdict follows the backend's authoritative cumulative certification when available,
+  // so the ✓/✗, pass/fail copy, and retake banner can never disagree with the granted
+  // badge. Falls back to the frontend score only if the backend didn't report status.
+  const passed = allSectionsDone && (certified ?? cumulativeScore >= 90);
 
   const sectionLabel =
     section === "A"
@@ -122,20 +139,11 @@ export function QuizResults({
         {!allSectionsDone ? "→" : passed ? "✓" : "✗"}
       </div>
 
-      <div
-        className={`text-[52px] font-extrabold tracking-tighter text-center leading-none mb-1 ${
-          !allSectionsDone ? "text-primary" : passed ? "text-success" : "text-destructive"
-        }`}
-      >
-        {cumulativeScore}%
+      <div className="text-[52px] font-extrabold tracking-tighter text-center leading-none mb-1 text-primary">
+        {finalScore}%
       </div>
 
-      <div className="text-xs text-muted-foreground text-center mb-1">{t.score}</div>
-      <div className="text-[11px] text-muted-foreground/50 text-center mb-4">
-        {lang === "es"
-          ? `Esta sección: ${finalScore}% · Acumulado: ${cumulativeCorrect}/${cumulativeTotal}`
-          : `This section: ${finalScore}% · Cumulative: ${cumulativeCorrect}/${cumulativeTotal}`}
-      </div>
+      <div className="text-xs text-muted-foreground text-center mb-4">{t.thisSection}</div>
 
       <div className="text-center text-sm text-muted-foreground mb-1">
         {agentName}
@@ -176,8 +184,9 @@ export function QuizResults({
           : passed ? t.passMsg : t.failMsg}
       </div>
 
-      {/* Just earned Junior badge */}
-      {justEarned && passed && (
+      {/* Just earned Junior badge — gated on the authoritative grant only (justEarned
+          is set from the backend cert), never on the frontend-recomputed score. */}
+      {justEarned && (
         <div className="bg-teal-500/10 border border-teal-500/20 rounded-xl py-3 px-4 text-center mb-5">
           <div className="text-lg mb-1">🎉</div>
           <div className="text-sm font-bold text-teal-400">
@@ -203,6 +212,40 @@ export function QuizResults({
           <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground">{t.total}</div>
         </div>
       </div>
+
+      {/* Block 2 — Overall progress */}
+      {overallSections && overallSections.length > 0 && (
+        <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-5">
+          <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2.5">
+            {t.overallProgress}
+          </div>
+          <div className="flex flex-col gap-1.5 mb-3">
+            {overallSections.map((s) => {
+              const pct = s.total > 0 ? Math.round((s.correct / s.total) * 100) : 0;
+              return (
+                <div key={s.section} className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">{sectionName(s.section, lang)}</span>
+                  <span className="text-foreground/70 tabular-nums">
+                    {s.correct}/{s.total} · {pct}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between border-t border-border/50 pt-2.5">
+            <span className="text-xs font-bold text-foreground">
+              {cumulativeCorrect}/{cumulativeTotal}{" "}
+              <span className="font-normal text-muted-foreground/60">{t.cumulativeCorrect}</span>
+            </span>
+            <span className="text-sm font-extrabold text-primary tabular-nums">{cumulativeScore}%</span>
+          </div>
+          {certOnTrack === false && (
+            <div className="bg-warning/5 border border-warning/15 rounded-lg py-2 px-3 mt-3 text-[11px] text-warning text-center leading-snug">
+              {t.certNotPossible}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Section completed banner */}
       <div className="bg-success/8 border border-success/25 rounded-xl py-2.5 px-4 text-center mb-5">

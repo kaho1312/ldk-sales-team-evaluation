@@ -186,9 +186,10 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 | Discarded attempts pollute cumulative counts | OPEN (backend) | `handleDiscardAndStart` calls `completeAttempt` on a partial attempt → marks it `failed`, so its partial answers persist and count in `getUserProgress`/`section-progress` forever (root cause of stray counts on the results screen). Proper fix = delete/abandon discarded attempts (Lambda route + redeploy). Frontend results display now tolerates this but still shows a small partial-section row |
 | Mid-Level & Senior questions not written | OPEN | configs are `is_active=0`, `total_questions=0` |
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
-| **Certification never grants even with a perfect score** | OPEN (P0) — fix in progress | See §10b. Root cause confirmed in code. Fernanda answered all 55 correctly yet shows "Reprobado" on every attempt and no cert. |
-| **Single section scored against the full 55-question tier** | OPEN (P0) — fix in progress | See §10b. A perfect 28-q Section A reads 28/55 = 51%; B = 24%; C = 25%. |
+| **Certification never grants even with a perfect score** | FIXED in code (P0) — PENDING DEPLOY | See §10b + §11. Cumulative server-side auto-grant added. Deploy Lambda FIRST, then frontend. |
+| **Single section scored against the full 55-question tier** | FIXED in code (P0) — PENDING DEPLOY | See §10b + §11. Override recalc + discard path now use the section's own question count. |
 | **Grader marks correct answers wrong on any infra hiccup** | OPEN (P1) | See §10b. `max_tokens:500` truncation / 429 / timeout → fallback `{passed:false,"Error al procesar la evaluación."}` saved as `final_grade=false`. Source of "errores I couldn't reproduce". |
+| getUserProgress correct/total use non-DISTINCT SUM/COUNT | OPEN (low) | Home "X/55 acumuladas" can over-count after retakes (counts every answer row, not distinct question). certEligibility/leaderboard/results now use DISTINCT; align this route too. Not P0-blocking (the `certified` flag reads the certifications table, unaffected). |
 
 ---
 
@@ -252,6 +253,33 @@ confidence; a backend cumulative-cert test is needed (P3).
 ---
 
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
+
+**Session 3 (2026-06-09) — P0 cumulative certification (CODE COMPLETE, PENDING DEPLOY).**
+Implemented + reviewed via a 4-lens adversarial workflow (7 findings confirmed & all fixed; 8 dismissed
+as latent/pre-existing). Verified: `tsc --noEmit` clean, `node --check lambda/index.mjs` OK, 29/29
+vitest, `vite build` OK.
+- **Cumulative cert is now server-authoritative.** New `certEligibility(conn,userId,tier)` in
+  `lambda/index.mjs`: best-grade-per-DISTINCT-question (`MAX(final_grade)` `GROUP BY question_id`, the
+  leaderboard convention) across all `('passed','failed')` attempts, vs config `total_questions`/
+  `passing_threshold` and ≤5-errors/section. Returns `section_correct`/`section_answered` breakdowns too.
+  New `syncCertification(conn,userId,tier)` grant-only auto-grant (INSERT wrapped in try/catch so a
+  failed insert still returns eligibility). Called from `POST /attempts/:id/complete` and
+  `POST /admin/answers/:id/override`; both return `cert` in the response. New `GET /users/:id/cert-status`.
+- **Denominator fix.** Override recalc + frontend `handleDiscardAndStart` now score a section against
+  ITS OWN question count (28/13/14), never 55. Per-section `score_percent` is display-only; the tier
+  cert no longer depends on any single attempt.
+- **Frontend** (`Index.tsx`, `QuizResults.tsx`, `scoring.ts`, `api.ts`): cert badge/justEarned driven by
+  `result.cert` (falls back to `getCertStatus()` when the response has no `cert` — covers the deploy
+  window where new FE talks to old Lambda). Results verdict (`passed`), per-section "Progreso general"
+  rows, and cumulative count now come from the backend's deduped numbers, so the on-screen ✓/✗ and
+  retake banner can never contradict the granted badge. Celebration banner gated on `justEarned` alone.
+  Removed the unreachable `result.passed && sectionsDone` grant path and the unused `grantCertification`
+  import.
+- **DEPLOY ORDER MATTERS:** Lambda (`lambda.zip` → `ldk-quiz-api`, the `wsi4x…` URL) must go FIRST, then
+  push frontend to `main` for Amplify. `/version` now returns `cumulative-cert-2026-06-09`. After deploy,
+  repair Fernanda (P2): re-complete or re-override one of her attempts to trigger the cumulative grant,
+  and discard her in-progress attempt #4.
+
 
 From CLAUDE.md (as of June 8, 2026) and progress.md:
 
@@ -332,7 +360,8 @@ Re-ordered 2026-06-09 (session 3) — the certification/scoring root cause (§10
 because it blocks the product's entire purpose (agents can't get certified). The admin-panel
 items from session 2 follow.
 
-**P0 — Make certification reachable (IN PROGRESS this session).** See §10b.
+**P0 — Make certification reachable — CODE COMPLETE (session 3), PENDING DEPLOY.** See §10b + §11.
+Remaining: deploy (Lambda first, then frontend), then repair Fernanda (P2). Original plan below.
 - Backend (`lambda/index.mjs`): add cumulative cert eligibility from the `answers` table
   (distinct best grade per `question_id` via `MAX(final_grade)` across `('passed','failed')`
   attempts, vs tier config `total_questions=55` / `passing_threshold=0.9` and ≤5 errors/section).

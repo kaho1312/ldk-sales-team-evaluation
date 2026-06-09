@@ -13,13 +13,15 @@ import {
   getSectionCounts,
 } from "@/lib/questions";
 import { saveAnswer, getAgentProgress, getProgressPercent } from "@/lib/progress";
+import { JUNIOR_TOTAL_QUESTIONS } from "@/lib/scoring";
+import type { CertStatus } from "@/lib/scoring";
 import { logout } from "@/lib/auth";
 import { useAuth } from "@/context/AuthContext";
 import {
   startAttempt,
   saveAnswerToAttempt,
   completeAttempt,
-  grantCertification,
+  getCertStatus,
   getUserCertifications,
   getUserProgress,
   getActiveConfig,
@@ -110,6 +112,11 @@ export default function Index() {
   const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
   const [sectionStats, setSectionStats] = useState<{ correct: number; scorePercent: number } | null>(null);
   const [allWrongReview, setAllWrongReview] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[] | null>(null);
+  // Overall (cross-section) breakdown for the results screen — derived frontend-side
+  const [overallSections, setOverallSections] = useState<{ section: string; correct: number; total: number }[] | null>(null);
+  const [certOnTrack, setCertOnTrack] = useState<boolean | null>(null);
+  // Authoritative cumulative certification status (backend) for the results screen.
+  const [certStatus, setCertStatus] = useState<CertStatus | null>(null);
 
   // Local progress (fast, shown while backend loads)
   const localAgentProgress = getAgentProgress(agentKey);
@@ -225,7 +232,17 @@ export default function Index() {
   // ── Discard a section's in-progress attempt and start fresh ──────────────
   const handleDiscardAndStart = (section: Section) => {
     const session = activeSessions[section];
-    if (session) completeAttempt(session.attemptId, quizConfig).catch(() => {});
+    if (session) {
+      // Score the discarded attempt against ITS section's question count, not the
+      // 55-question tier total (quizConfig) — otherwise a partial section is recorded
+      // at ~25-51% against 55. (Cumulative cert uses best-grade-per-question, so this
+      // partial attempt can't lower a later complete run anyway.)
+      const sectionTotal = FALLBACK_QUESTIONS.filter((qq) => qq.section === section).length;
+      completeAttempt(session.attemptId, {
+        total_questions: sectionTotal,
+        passing_threshold: quizConfig.passing_threshold,
+      }).catch(() => {});
+    }
     setActiveSessions((prev) => { const next = { ...prev }; delete next[section]; return next; });
     setSelectedSection(section);
     setTestMode(false);
@@ -382,6 +399,60 @@ export default function Index() {
             const updated = await getUserProgress(user.id, "junior");
             setProgressData(updated);
           } catch {}
+          // Authoritative cumulative status: prefer result.cert from /complete; if the
+          // backend didn't return it (e.g. old Lambda during a deploy window), ask the
+          // dedicated endpoint. Drives the cert badge, verdict, and "Progreso general".
+          let certInfo: CertStatus | null = result.cert ?? null;
+          if (!certInfo) {
+            try { certInfo = await getCertStatus(user.id, "junior"); } catch { certInfo = null; }
+          }
+          setCertStatus(certInfo);
+          // Build the overall per-section breakdown for the "Progreso general" block +
+          // on-track indicator. Prefer the backend's deduped per-section counts; fall
+          // back to a frontend derivation only when cert data is unavailable.
+          try {
+            if (certInfo?.section_correct && certInfo.section_answered) {
+              const sc = certInfo.section_correct;
+              const sa = certInfo.section_answered;
+              const breakdown = (["A", "B", "C"] as const)
+                .map((sec) => ({
+                  section: sec,
+                  correct: sc[sec] ?? 0,
+                  total: sectionCounts[sec] ?? 0,
+                  answered: sa[sec] ?? 0,
+                }))
+                .filter((s) => s.answered > 0);
+              setOverallSections(breakdown.map(({ section, correct, total }) => ({ section, correct, total })));
+              const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
+              const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
+              setCertOnTrack((certInfo.correct + remaining) / JUNIOR_TOTAL_QUESTIONS >= quizConfig.passing_threshold);
+            } else {
+              // Fallback (older backend): derive from section-progress minus wrong-answers.
+              const [secProg, wrongs] = await Promise.all([
+                getSectionProgress(user.id, "junior"),
+                getWrongAnswers(user.id, "junior"),
+              ]);
+              const wrongBySection: Record<string, number> = { A: 0, B: 0, C: 0 };
+              for (const w of wrongs) if (w.section in wrongBySection) wrongBySection[w.section]++;
+              const breakdown = (["A", "B", "C"] as const)
+                .map((sec) => {
+                  const total = sectionCounts[sec] ?? 0;
+                  let answered = Math.min(secProg[sec] ?? 0, total);
+                  let correct = Math.max(0, answered - (wrongBySection[sec] ?? 0));
+                  if (sec === selectedSection) {
+                    correct = result.total_correct;
+                    answered = sessionQuestions.length;
+                  }
+                  return { section: sec, correct, total, answered };
+                })
+                .filter((s) => s.answered > 0);
+              setOverallSections(breakdown.map(({ section, correct, total }) => ({ section, correct, total })));
+              const grandCorrect = breakdown.reduce((n, s) => n + s.correct, 0);
+              const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
+              const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
+              setCertOnTrack((grandCorrect + remaining) / JUNIOR_TOTAL_QUESTIONS >= quizConfig.passing_threshold);
+            }
+          } catch {}
           if (sectionsDone) {
             try {
               const wrongFromDB = await getWrongAnswers(user.id, "junior");
@@ -399,11 +470,15 @@ export default function Index() {
               );
             } catch {}
           }
-          if (result.passed && sectionsDone && !earnedTiers.has(activeTier)) {
-            await grantCertification(user.id, "junior", currentAttemptId);
+          // Certification is decided CUMULATIVELY by the backend (certInfo) across all
+          // of this user's completed attempts — not by this single section's pass/fail.
+          // The backend auto-grants when eligible; we just reflect the badge.
+          if (certInfo?.certified && !earnedTiers.has(activeTier)) {
             saveEarnedTierLocal(agentKey, activeTier);
             setEarnedTiers((prev) => new Set([...prev, activeTier]));
-            setJustEarned(activeTier);
+            // result.cert distinguishes a fresh grant; the cert-status fallback can't,
+            // so animate whenever the tier is first earned this session (guarded above).
+            if (certInfo.newlyGranted !== false) setJustEarned(activeTier);
           }
         } catch {
           // Fall back to local check if backend fails
@@ -442,12 +517,19 @@ export default function Index() {
     setActiveSessions({});
     setSectionStats(null);
     setAllWrongReview(null);
+    setOverallSections(null);
+    setCertOnTrack(null);
+    setCertStatus(null);
     setScreen("start");
   };
 
   // Backend progress for the results screen (reload after attempt)
   const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct?.length ?? 0);
-  const liveTotal = progressData?.total || 55;
+  // Grand total correct across attempted sections — derived from the breakdown so it
+  // reconciles with the per-section rows; denominator is the full Junior tier (55).
+  const overallCorrect = overallSections
+    ? overallSections.reduce((n, s) => n + s.correct, 0)
+    : liveCorrect;
   // True once all 3 sections (A, B, C) have been submitted in this or prior sessions
   const allSectionsDone = completedSections.size >= 3;
 
@@ -661,12 +743,15 @@ export default function Index() {
             section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
-            cumulativeCorrect={liveCorrect}
-            cumulativeTotal={liveTotal}
+            cumulativeCorrect={overallCorrect}
+            cumulativeTotal={JUNIOR_TOTAL_QUESTIONS}
             justEarned={!!justEarned}
             allSectionsDone={allSectionsDone}
+            certified={certStatus?.certified}
             sectionCorrect={sectionStats?.correct}
             sectionScorePercent={sectionStats?.scorePercent}
+            overallSections={overallSections ?? undefined}
+            certOnTrack={certOnTrack}
             allWrongAnswers={allSectionsDone ? (allWrongReview ?? undefined) : undefined}
             onRestart={handleRestart}
           />

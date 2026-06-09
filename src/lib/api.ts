@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { calculateScore } from "./scoring";
-import type { ScoreResult } from "./scoring";
+import type { ScoreResult, CertStatus } from "./scoring";
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -181,6 +181,12 @@ export async function completeAttempt(
 
 export async function getUserCertifications(userId: string): Promise<Certification[]> {
   return apiFetch<Certification[]>(`/users/${userId}/certifications`);
+}
+
+// Authoritative cumulative certification status for a tier (correct vs 55, per-section
+// errors, pass/fail reasons, and whether the cert is already granted).
+export async function getCertStatus(userId: string, tier: string): Promise<CertStatus> {
+  return apiFetch<CertStatus>(`/users/${userId}/cert-status`, { query: { tier } });
 }
 
 export async function grantCertification(
