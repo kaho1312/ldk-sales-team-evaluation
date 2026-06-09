@@ -19,6 +19,7 @@ interface QuizResultsProps {
   cumulativeCorrect: number;
   cumulativeTotal: number;
   justEarned: boolean;
+  allSectionsDone: boolean;
   onRestart: () => void;
 }
 
@@ -71,14 +72,15 @@ export function QuizResults({
   cumulativeCorrect,
   cumulativeTotal,
   justEarned,
+  allSectionsDone,
   onRestart,
 }: QuizResultsProps) {
   const t = LANG[lang];
   const correctCount = results.filter((r) => r.isCorrect).length;
   const wrongCount = results.filter((r) => !r.isCorrect).length;
-  const finalScore = Math.round((correctCount / totalQuestions) * 100);
-  const cumulativeScore = Math.round((cumulativeCorrect / cumulativeTotal) * 100);
-  const passed = cumulativeScore >= 90;
+  const finalScore = totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0;
+  const cumulativeScore = cumulativeTotal > 0 ? Math.round((cumulativeCorrect / cumulativeTotal) * 100) : 0;
+  const passed = allSectionsDone && cumulativeScore >= 90;
 
   const sectionLabel =
     section === "A"
@@ -98,17 +100,19 @@ export function QuizResults({
       {/* Score circle */}
       <div
         className={`w-[68px] h-[68px] rounded-full flex items-center justify-center text-2xl font-extrabold mx-auto mb-4 ${
-          passed
-            ? "bg-success/10 border-2 border-success/35 text-success"
-            : "bg-destructive/10 border-2 border-destructive/30 text-destructive"
+          !allSectionsDone
+            ? "bg-primary/10 border-2 border-primary/30 text-primary"
+            : passed
+              ? "bg-success/10 border-2 border-success/35 text-success"
+              : "bg-destructive/10 border-2 border-destructive/30 text-destructive"
         }`}
       >
-        {passed ? "✓" : "✗"}
+        {!allSectionsDone ? "→" : passed ? "✓" : "✗"}
       </div>
 
       <div
         className={`text-[52px] font-extrabold tracking-tighter text-center leading-none mb-1 ${
-          passed ? "text-success" : "text-destructive"
+          !allSectionsDone ? "text-primary" : passed ? "text-success" : "text-destructive"
         }`}
       >
         {cumulativeScore}%
@@ -140,10 +144,24 @@ export function QuizResults({
 
       <div className="text-[11px] text-muted-foreground/50 text-center mb-5">{sectionLabel}</div>
 
-      <div className="text-xl font-bold text-foreground text-center mb-1.5">{passed ? t.passed : t.failed}</div>
+      <div className="text-xl font-bold text-foreground text-center mb-1.5">
+        {!allSectionsDone
+          ? (cumulativeScore >= 80
+              ? (lang === "es" ? "¡Excelente!" : "Great work!")
+              : (lang === "es" ? "¡Buen trabajo!" : "Keep going!"))
+          : passed ? t.passed : t.failed}
+      </div>
 
       <div className="text-sm text-muted-foreground text-center leading-relaxed mb-6">
-        {passed ? t.passMsg : t.failMsg}
+        {!allSectionsDone
+          ? (cumulativeScore >= 80
+              ? (lang === "es"
+                  ? `¡Llevas ${cumulativeCorrect}/${cumulativeTotal} respuestas correctas! Sigue así para completar tu certificación.`
+                  : `You have ${cumulativeCorrect}/${cumulativeTotal} correct so far! Keep it up to complete your certification.`)
+              : (lang === "es"
+                  ? `Llevas ${cumulativeCorrect}/${cumulativeTotal} correctas. Revisa las preguntas y continúa con la siguiente sección.`
+                  : `You have ${cumulativeCorrect}/${cumulativeTotal} correct so far. Review and continue to the next section.`))
+          : passed ? t.passMsg : t.failMsg}
       </div>
 
       {/* Just earned Junior badge */}
@@ -195,8 +213,8 @@ export function QuizResults({
         </div>
       )}
 
-      {/* Retake warning */}
-      {!passed && (
+      {/* Retake warning — only after all sections are done and the final score didn't pass */}
+      {allSectionsDone && !passed && (
         <div className="bg-warning/5 border border-warning/15 rounded-xl py-2.5 px-4 text-sm text-warning text-center mb-4">
           {t.retakeIn}
         </div>

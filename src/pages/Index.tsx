@@ -363,8 +363,21 @@ export default function Index() {
 
       if (currentAttemptId && user) {
         try {
-          const result = await completeAttempt(currentAttemptId, quizConfig);
-          if (result.passed && !earnedTiers.has(activeTier)) {
+          const result = await completeAttempt(currentAttemptId, {
+            total_questions: sessionQuestions.length,
+            passing_threshold: quizConfig.passing_threshold,
+          });
+          // Mark this section done and compute whether all 3 are now complete
+          setCompletedSections((prev) => new Set([...prev, selectedSection!]));
+          const sectionsDone = completedSections.has(selectedSection!)
+            ? completedSections.size >= 3
+            : completedSections.size + 1 >= 3;
+          // Refresh cumulative progress so results screen shows accurate numbers
+          try {
+            const updated = await getUserProgress(user.id, "junior");
+            setProgressData(updated);
+          } catch {}
+          if (result.passed && sectionsDone && !earnedTiers.has(activeTier)) {
             await grantCertification(user.id, "junior", currentAttemptId);
             saveEarnedTierLocal(agentKey, activeTier);
             setEarnedTiers((prev) => new Set([...prev, activeTier]));
@@ -411,6 +424,8 @@ export default function Index() {
   // Backend progress for the results screen (reload after attempt)
   const liveCorrect = progressData?.correct ?? (getAgentProgress(agentKey).correct?.length ?? 0);
   const liveTotal = progressData?.total || 55;
+  // True once all 3 sections (A, B, C) have been submitted in this or prior sessions
+  const allSectionsDone = completedSections.size >= 3;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
@@ -625,6 +640,7 @@ export default function Index() {
             cumulativeCorrect={liveCorrect}
             cumulativeTotal={liveTotal}
             justEarned={!!justEarned}
+            allSectionsDone={allSectionsDone}
             onRestart={handleRestart}
           />
         )}

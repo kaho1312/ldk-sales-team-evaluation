@@ -163,7 +163,16 @@ export const handler = async (event) => {
     // ── GET /attempts/active ───────────────────────────────────────────────────
     if (method === 'GET' && seg[0] === 'attempts' && seg[1] === 'active') {
       const uid = q.userId || claims.sub;
-      const [rows] = await conn.query('SELECT * FROM quiz_attempts WHERE user_id = ? AND certification_tier = ? AND status = ? ORDER BY started_at DESC LIMIT 1', [uid, (q.tier || 'junior').toLowerCase(), 'in_progress']);
+      // Prefer the in-progress attempt with the most saved answers so an empty
+      // attempt created by accident doesn't shadow one with real progress.
+      const [rows] = await conn.query(
+        `SELECT qa.* FROM quiz_attempts qa
+         LEFT JOIN (SELECT attempt_id, COUNT(*) AS cnt FROM answers GROUP BY attempt_id) ac ON qa.id = ac.attempt_id
+         WHERE qa.user_id = ? AND qa.certification_tier = ? AND qa.status = 'in_progress'
+         ORDER BY COALESCE(ac.cnt, 0) DESC, qa.started_at DESC
+         LIMIT 1`,
+        [uid, (q.tier || 'junior').toLowerCase()]
+      );
       return ok(rows[0] || null);
     }
 
@@ -221,9 +230,14 @@ export const handler = async (event) => {
     // ── GET /users/:id/progress ────────────────────────────────────────────────
     if (method === 'GET' && seg[0] === 'users' && seg[2] === 'progress') {
       const tier = (q.tier || 'junior').toLowerCase();
-      const [best] = await conn.query('SELECT total_correct, total_questions FROM quiz_attempts WHERE user_id=? AND certification_tier=? AND status=? ORDER BY score_percent DESC LIMIT 1', [seg[1], tier, 'passed']);
+      const [summed] = await conn.query(
+        `SELECT COALESCE(SUM(CASE WHEN a.final_grade = 1 THEN 1 ELSE 0 END), 0) AS correct, COUNT(*) AS total
+         FROM answers a JOIN quiz_attempts qa ON qa.id = a.attempt_id
+         WHERE qa.user_id = ? AND qa.certification_tier = ? AND qa.status IN ('passed', 'failed')`,
+        [seg[1], tier]
+      );
       const [certs] = await conn.query('SELECT id FROM certifications WHERE user_id=? AND certification_tier=?', [seg[1], tier]);
-      return ok({ correct: best[0]?.total_correct || 0, total: best[0]?.total_questions || 0, certified: certs.length > 0 });
+      return ok({ correct: Number(summed[0].correct), total: Number(summed[0].total), certified: certs.length > 0 });
     }
 
     // ── GET /users/:id/completed-sections ──────────────────────────────────────
@@ -234,6 +248,36 @@ export const handler = async (event) => {
         [seg[1], tier]
       );
       return ok(rows.map(r => r.section));
+    }
+
+    // ── GET /users/:id/active-attempts ────────────────────────────────────────
+    if (method === 'GET' && seg[0] === 'users' && seg[2] === 'active-attempts') {
+      const tier = (q.tier || 'junior').toLowerCase();
+      const [rows] = await conn.query(
+        `SELECT qa.id AS attempt_id, a.section, COUNT(DISTINCT a.question_id) AS answered_count
+         FROM quiz_attempts qa
+         JOIN answers a ON a.attempt_id = qa.id
+         WHERE qa.user_id = ? AND qa.certification_tier = ? AND qa.status = 'in_progress'
+         GROUP BY qa.id, a.section
+         ORDER BY answered_count DESC`,
+        [seg[1], tier]
+      );
+      return ok(rows.map(r => ({ attemptId: r.attempt_id, section: r.section, answeredCount: Number(r.answered_count) })));
+    }
+
+    // ── GET /users/:id/section-progress ────────────────────────────────────────
+    if (method === 'GET' && seg[0] === 'users' && seg[2] === 'section-progress') {
+      const tier = (q.tier || 'junior').toLowerCase();
+      const [rows] = await conn.query(
+        `SELECT a.section, COUNT(DISTINCT a.question_id) as answered
+         FROM answers a JOIN quiz_attempts qa ON a.attempt_id=qa.id
+         WHERE qa.user_id=? AND qa.certification_tier=?
+         GROUP BY a.section`,
+        [seg[1], tier]
+      );
+      const result = { A: 0, B: 0, C: 0 };
+      for (const r of rows) if (r.section in result) result[r.section] = Number(r.answered);
+      return ok(result);
     }
 
     // ── GET /leaderboard ───────────────────────────────────────────────────────
