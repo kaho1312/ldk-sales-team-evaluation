@@ -101,13 +101,18 @@ export function Leaderboard({ lang }: LeaderboardProps) {
                 </div>
               </div>
               <div
-                className={`text-[10px] font-bold tracking-wider uppercase px-2 py-1 rounded-lg shrink-0 ${
+                className={`text-[10px] font-bold tracking-wider uppercase px-2.5 py-1.5 rounded-lg shrink-0 text-center ${
                   entry.certified
                     ? "bg-success/10 text-success border border-success/20"
                     : "bg-secondary text-muted-foreground/50 border border-border"
                 }`}
               >
-                {entry.certified ? lb.certified : lb.notCertified}
+                {entry.certified ? (
+                  <>
+                    <div className="text-[11px]">★ {(entry.certification_tier ?? "junior").toUpperCase()}</div>
+                    <div className="text-[8px] font-medium tracking-widest opacity-75">{lb.certified}</div>
+                  </>
+                ) : lb.notCertified}
               </div>
             </div>
           );

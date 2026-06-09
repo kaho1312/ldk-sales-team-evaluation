@@ -243,6 +243,7 @@ export interface LeaderboardEntry {
   correct: number;
   total: number;
   certified: boolean;
+  certification_tier: string | null;
 }
 
 export async function getLeaderboardData(): Promise<LeaderboardEntry[]> {
