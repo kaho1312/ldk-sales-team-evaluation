@@ -5,6 +5,7 @@ import {
   adminGetAllAttempts,
   adminSetUserAdmin,
   adminDeleteUser,
+  adminSendPasswordReset,
   getQuizConfigs,
   updateQuizConfig,
   exportAttemptsToCSV,
@@ -67,6 +68,7 @@ function AgentesTab() {
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [sendingReset, setSendingReset] = useState<string | null>(null);
 
   const handleToggleAdmin = async (userId: string, currentIsAdmin: boolean) => {
     setTogglingAdmin(userId);
@@ -94,6 +96,18 @@ function AgentesTab() {
     } finally {
       setDeleting(null);
       setConfirmingDelete(null);
+    }
+  };
+
+  const handleSendReset = async (userId: string, email: string) => {
+    setSendingReset(userId);
+    try {
+      await adminSendPasswordReset(userId);
+      toast.success(`Correo de restablecimiento enviado a ${email}`);
+    } catch {
+      toast.error("Error al enviar el correo de restablecimiento");
+    } finally {
+      setSendingReset(null);
     }
   };
 
@@ -263,6 +277,15 @@ function AgentesTab() {
                       : user.is_admin
                         ? "Quitar acceso admin"
                         : "Dar acceso admin"}
+                  </button>
+
+                  {/* Send password-reset email */}
+                  <button
+                    className="text-[11px] font-bold px-2.5 py-1 rounded-lg border border-primary/20 text-primary/90 hover:bg-primary/10 transition-colors disabled:opacity-50"
+                    disabled={sendingReset === user.id}
+                    onClick={(e) => { e.stopPropagation(); handleSendReset(user.id, user.email); }}
+                  >
+                    {sendingReset === user.id ? "Enviando..." : "Enviar restablecimiento"}
                   </button>
 
                   {/* Delete user — hidden for your own account (backend also blocks self-deletion) */}

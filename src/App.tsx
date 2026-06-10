@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "./pages/Index.tsx";
 import Login from "./pages/Login.tsx";
 import Register from "./pages/Register.tsx";
+import ForgotPassword from "./pages/ForgotPassword.tsx";
+import ResetPassword from "./pages/ResetPassword.tsx";
 import Admin from "./pages/Admin.tsx";
 import AdminAttempt from "./pages/AdminAttempt.tsx";
 import NotFound from "./pages/NotFound.tsx";
@@ -86,6 +88,10 @@ const App = () => (
               path="/register"
               element={<RedirectIfAuthed><Register /></RedirectIfAuthed>}
             />
+            {/* Public — reachable while logged out (and /reset must work from an
+                emailed link regardless of auth state) */}
+            <Route path="/forgot" element={<ForgotPassword />} />
+            <Route path="/reset" element={<ResetPassword />} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

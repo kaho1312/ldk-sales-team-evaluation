@@ -333,6 +333,11 @@ export async function adminDeleteUser(userId: string): Promise<void> {
   await apiFetch<void>(`/admin/users/${userId}`, { method: "DELETE" });
 }
 
+// Email a password-reset link to the user (admin-initiated invite, 72h token).
+export async function adminSendPasswordReset(userId: string): Promise<void> {
+  await apiFetch<void>(`/admin/users/${userId}/send-reset`, { method: "POST" });
+}
+
 // ── Admin — attempt detail with all answers ───────────────────────────────────
 
 export interface AttemptWithAnswers extends QuizAttempt {

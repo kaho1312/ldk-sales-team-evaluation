@@ -86,6 +86,44 @@ export async function logout(): Promise<void> {
   localStorage.removeItem(USER_KEY);
 }
 
+// ── Password reset ────────────────────────────────────────────────────────────
+
+// Request a reset link. The backend always responds 200 (it never reveals whether
+// the email is registered), so success here just means the request was accepted.
+export async function requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(apiUrl("/auth/forgot"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.toLowerCase().trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { success: false, error: data.message || "No se pudo procesar la solicitud" };
+    }
+    return { success: true };
+  } catch {
+    return { success: false, error: "Error de conexión" };
+  }
+}
+
+// Set a new password using a token from the reset email link.
+export async function resetPassword(token: string, password: string): Promise<{ success: boolean; error?: string }> {
+  if (password.length < 6) return { success: false, error: "La contraseña debe tener al menos 6 caracteres" };
+  try {
+    const res = await fetch(apiUrl("/auth/reset"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, password }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { success: false, error: data.message || "El enlace es inválido o ha expirado" };
+    return { success: true };
+  } catch {
+    return { success: false, error: "Error de conexión" };
+  }
+}
+
 // ── Legacy shape kept for backward compatibility ──────────────────────────────
 
 export interface Session {

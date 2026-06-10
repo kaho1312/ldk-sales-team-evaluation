@@ -1,5 +1,5 @@
 import { createPool } from 'mysql2/promise';
-import { createHmac, scrypt, randomBytes, timingSafeEqual, randomUUID } from 'crypto';
+import { createHmac, createHash, scrypt, randomBytes, timingSafeEqual, randomUUID } from 'crypto';
 import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
@@ -7,6 +7,13 @@ const JWT_SECRET = process.env.JWT_SECRET || 'ldk-quiz-secret-change-in-prod';
 const JWT_TTL = 60 * 60 * 24 * 7; // 7 days
 
 const ADMIN_EMAILS = new Set(['kay@ldk.lat', 'fernanda@ldk.lat', 'joaquin.g@ldk.lat']);
+
+// ── Password-reset / email (Resend) config ─────────────────────────────────────
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://quiz.ldk.fyi';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+const RESET_FROM = process.env.RESET_FROM || 'LDK Ventas <no-reply@ldk.lat>';
+const RESET_TTL_SELF = 60 * 60;          // self-service "forgot password": 1 hour
+const RESET_TTL_INVITE = 60 * 60 * 72;   // admin-sent invite: 72 hours
 
 // ── DB pool ───────────────────────────────────────────────────────────────────
 
@@ -57,6 +64,57 @@ async function checkPwd(pw, stored) {
   const [salt, hash] = stored.split(':');
   const derived = await scryptAsync(pw, salt, 64);
   return timingSafeEqual(Buffer.from(hash, 'hex'), derived);
+}
+
+// ── Password reset tokens + email ───────────────────────────────────────────────
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+
+// Create a single-use reset token for a user and return the raw token (only the
+// hash is stored). Expiry is computed server-side in UTC so it's independent of the
+// connection's session time zone.
+async function createResetToken(conn, userId, ttlSeconds) {
+  const raw = randomBytes(32).toString('hex');
+  await conn.query(
+    'INSERT INTO password_resets (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))',
+    [randomUUID(), userId, sha256(raw), ttlSeconds]
+  );
+  return raw;
+}
+
+// Send a reset link via Resend (raw fetch — no SDK/dependency). Returns true on a 2xx.
+// If RESEND_API_KEY is unset it logs and returns false rather than throwing.
+async function sendResetEmail(toEmail, fullName, link, kind) {
+  if (!RESEND_API_KEY) { console.log('RESEND_API_KEY not set — cannot send reset email'); return false; }
+  const name = (fullName || '').split(' ')[0] || '';
+  const intro = kind === 'invite'
+    ? 'Un administrador de LDK solicitó restablecer tu contraseña para la Certificación de Ventas.'
+    : 'Recibimos una solicitud para restablecer tu contraseña de la Certificación de Ventas LDK.';
+  const hours = kind === 'invite' ? 72 : 1;
+  const subject = 'Restablece tu contraseña — Certificación de Ventas LDK';
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#0f172a">
+      <h2 style="color:#001344;margin-bottom:8px">Restablecer contraseña</h2>
+      <p>Hola${name ? ' ' + name : ''},</p>
+      <p>${intro}</p>
+      <p style="margin:24px 0">
+        <a href="${link}" style="background:#001344;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:bold;display:inline-block">
+          Crear nueva contraseña
+        </a>
+      </p>
+      <p style="font-size:13px;color:#475569">Este enlace caduca en ${hours} hora${hours === 1 ? '' : 's'}. Si no solicitaste esto, puedes ignorar este correo.</p>
+      <p style="font-size:12px;color:#94a3b8;word-break:break-all">Si el botón no funciona, copia este enlace:<br>${link}</p>
+    </div>`;
+  const text = `Restablecer contraseña\n\nHola${name ? ' ' + name : ''},\n${intro}\n\nAbre este enlace para crear una nueva contraseña (caduca en ${hours} hora${hours === 1 ? '' : 's'}):\n${link}\n\nSi no solicitaste esto, ignora este correo.`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESET_FROM, to: [toEmail], subject, html, text }),
+    });
+    if (!res.ok) { console.log('Resend send failed:', res.status, await res.text().catch(() => '')); return false; }
+    return true;
+  } catch (e) { console.log('Resend send error:', e.message); return false; }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -176,7 +234,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'cumulative-cert-2026-06-09', adminGuardHonorsEmails: true, cumulativeCert: true });
+    return ok({ version: 'password-reset-2026-06-10', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -223,6 +281,41 @@ export const handler = async (event) => {
       await conn.query('UPDATE users SET last_login = NOW() WHERE id = ?', [rows[0].id]);
       const jwt = signToken({ sub: rows[0].id, email: rows[0].email });
       return ok({ token: jwt, user: { id: rows[0].id, email: rows[0].email, full_name: rows[0].full_name, is_admin: !!rows[0].is_admin } });
+    }
+
+    // ── POST /auth/forgot — self-service password reset request ──────────────────
+    // Always returns 200 (never reveals whether an email is registered). When the
+    // email maps to a user, mints a token and emails the reset link.
+    if (method === 'POST' && seg[0] === 'auth' && seg[1] === 'forgot') {
+      const { email } = body;
+      if (email && typeof email === 'string') {
+        const norm = email.toLowerCase().trim();
+        const [rows] = await conn.query('SELECT id, email, full_name FROM users WHERE email = ?', [norm]);
+        if (rows.length) {
+          const raw = await createResetToken(conn, rows[0].id, RESET_TTL_SELF);
+          await sendResetEmail(rows[0].email, rows[0].full_name, `${APP_BASE_URL}/reset?token=${raw}`, 'self');
+        }
+      }
+      return ok({ ok: true });
+    }
+
+    // ── POST /auth/reset — consume a token and set a new password ────────────────
+    if (method === 'POST' && seg[0] === 'auth' && seg[1] === 'reset') {
+      const { token: resetToken, password } = body;
+      if (!resetToken || !password) return fail('Token y contraseña requeridos');
+      if (password.length < 6) return fail('La contraseña debe tener al menos 6 caracteres');
+      const [rows] = await conn.query(
+        `SELECT id, user_id FROM password_resets
+          WHERE token_hash = ? AND used_at IS NULL AND expires_at > UTC_TIMESTAMP()
+          ORDER BY created_at DESC LIMIT 1`,
+        [sha256(resetToken)]
+      );
+      if (!rows.length) return fail('El enlace de restablecimiento es inválido o ha expirado', 400);
+      const hash = await hashPwd(password);
+      await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, rows[0].user_id]);
+      // Consume this token and invalidate any other outstanding tokens for the user.
+      await conn.query('UPDATE password_resets SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].user_id]);
+      return ok({ ok: true });
     }
 
     // All routes below require auth
@@ -473,6 +566,16 @@ export const handler = async (event) => {
         if (seg[2] === claims.sub) return fail('No puedes eliminar tu propia cuenta', 400);
         const [r] = await conn.query('DELETE FROM users WHERE id = ?', [seg[2]]);
         return ok({ ok: true, deleted: r.affectedRows });
+      }
+
+      // POST /admin/users/:id/send-reset — email a password-reset link to the user
+      if (method === 'POST' && seg[1] === 'users' && seg[3] === 'send-reset') {
+        const [urows] = await conn.query('SELECT id, email, full_name FROM users WHERE id = ?', [seg[2]]);
+        if (!urows.length) return fail('Usuario no encontrado', 404);
+        const raw = await createResetToken(conn, urows[0].id, RESET_TTL_INVITE);
+        const sent = await sendResetEmail(urows[0].email, urows[0].full_name, `${APP_BASE_URL}/reset?token=${raw}`, 'invite');
+        if (!sent) return fail('No se pudo enviar el correo. Verifica la configuración de Resend (RESEND_API_KEY / dominio).', 502);
+        return ok({ ok: true });
       }
 
       // GET /admin/attempts (all — no ID)
