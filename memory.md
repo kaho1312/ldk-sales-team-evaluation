@@ -1,6 +1,6 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-06-09 (session 3 — root-caused "all answers right but no certification"; P0 fix in progress)
+# Last updated: 2026-06-10 (session 4 — results-review UI: question text + agent answer in review cards, aggregate "Puntaje Total", green/red correct-incorrect highlighting; admin attempt cards now show question text)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -186,10 +186,10 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 | Discarded attempts pollute cumulative counts | OPEN (backend) | `handleDiscardAndStart` calls `completeAttempt` on a partial attempt → marks it `failed`, so its partial answers persist and count in `getUserProgress`/`section-progress` forever (root cause of stray counts on the results screen). Proper fix = delete/abandon discarded attempts (Lambda route + redeploy). Frontend results display now tolerates this but still shows a small partial-section row |
 | Mid-Level & Senior questions not written | OPEN | configs are `is_active=0`, `total_questions=0` |
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
-| **Certification never grants even with a perfect score** | FIXED in code (P0) — PENDING DEPLOY | See §10b + §11. Cumulative server-side auto-grant added. Deploy Lambda FIRST, then frontend. |
-| **Single section scored against the full 55-question tier** | FIXED in code (P0) — PENDING DEPLOY | See §10b + §11. Override recalc + discard path now use the section's own question count. |
+| **Certification never grants even with a perfect score** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Cumulative server-side auto-grant. Lambda live (`/version`=`cumulative-cert-2026-06-09`); frontend pushed `b4aede4`. Fernanda certified. |
+| **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
 | **Grader marks correct answers wrong on any infra hiccup** | OPEN (P1) | See §10b. `max_tokens:500` truncation / 429 / timeout → fallback `{passed:false,"Error al procesar la evaluación."}` saved as `final_grade=false`. Source of "errores I couldn't reproduce". |
-| getUserProgress correct/total use non-DISTINCT SUM/COUNT | OPEN (low) | Home "X/55 acumuladas" can over-count after retakes (counts every answer row, not distinct question). certEligibility/leaderboard/results now use DISTINCT; align this route too. Not P0-blocking (the `certified` flag reads the certifications table, unaffected). |
+| "TU PROGRESO" home cards: no correct/wrong; stale green on retake; **56/56** footer | OPEN (NEXT) | See §10c. Cards show only *answered*; retake keeps stale green "28/28"; footer shows >55 because `GET /progress` sums answer rows (non-DISTINCT). Design scoped; one open question (retake scoring model). |
 
 ---
 
@@ -252,9 +252,62 @@ confidence; a backend cumulative-cert test is needed (P3).
 
 ---
 
+## 10c. "TU PROGRESO" HOME-SCREEN IMPROVEMENT (scoped 2026-06-09, build NEXT SESSION)
+
+**Where:** `src/pages/Index.tsx`, the "TU PROGRESO" block (~L623–708, `screen === "start"`).
+
+**Problems to fix (3):**
+1. Section A/B/C cards show only *answered* counts ("28/28 respondidas") — not how many were **correct vs
+   wrong**.
+2. **Stale green on retake.** A card's green "Completada / 28/28" persists during a retake because
+   `completedSections` is never cleared when a new attempt starts, and `sectionProgress` =
+   `COUNT(DISTINCT question_id)` across ALL attempts (so re-answering already-seen questions doesn't move
+   it). Net: start a retake, answer 2 questions, return home → still green "28/28". Confusing.
+3. **Footer "56/56"** (impossible; only 55 questions). `GET /users/:id/progress` sums answer *rows*
+   (`SUM(final_grade) … COUNT(*)`, no DISTINCT) across `('passed','failed')` attempts, so retakes inflate
+   both numerator and denominator past 55.
+
+**Product decisions captured from the user (2026-06-09):**
+- **Card display = correct / wrong / unanswered** (three-way), e.g. `✓14  ✗6 · 8 sin responder`, with a
+  green(correct)/red(wrong)/grey(unanswered) progress bar.
+- **Green ✓ "done" only within the cert limit** (≤ `floor(55*0.1)=5` wrong in that section); show an amber
+  "keep improving / por corregir" state if the section exceeds the limit.
+- **OPEN QUESTION — decide before building: retake scoring model.** keep-best (matches the shipped
+  cumulative cert — a retake never lowers you) vs replace-with-latest vs wipe-&-restart. The three differ a
+  lot in backend work and UX; do NOT implement until the user picks. (User deferred this on 2026-06-09.)
+
+**Planned implementation (pending the open question):**
+- **Reuse `GET /users/:id/cert-status`** — it already returns deduped `section_correct` / `section_errors`
+  / `section_answered` + cumulative `correct` / `total_questions` (added in §11 P0 work). Make it the
+  single source for the home cards AND the footer. This kills the 56/56 bug (distinct, ≤55) and gives the
+  correct/wrong/unanswered numbers with NO new scoring code.
+- **Retake visual fix:** give an active in-progress attempt precedence over the stale `completedSections`
+  green state, and drive the in-progress card's bar/label from the active attempt's `answeredCount`
+  (`getActiveAttempts`) so a 2-of-28 retake reads "Reintento · pregunta 3 de 28", not green 28/28. (May also
+  clear the section from `completedSections` visually when a retake starts.)
+- **56/56 fix:** prefer pointing the footer at `cert-status`; alternatively change `GET /progress` to
+  `COUNT(DISTINCT question_id)` + best-grade-wins for consistency with `certEligibility`/leaderboard.
+- i18n: this block uses mostly inline ES/EN ternaries (not `i18n.ts` keys) — add new strings the same way
+  or migrate to `LANG`.
+
+---
+
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
 
-**Session 3 (2026-06-09) — P0 cumulative certification (CODE COMPLETE, PENDING DEPLOY).**
+**Session 4 (2026-06-10) — results-review UI changes (UI only; no Lambda/grading/question-bank changes).**
+Verified `tsc --noEmit` clean + `vite build` OK. NOT yet committed/deployed at time of writing.
+Files: `src/components/QuizResults.tsx`, `src/pages/Index.tsx`, `src/pages/AdminAttempt.tsx`, `src/lib/i18n.ts`.
+- **Review cards now show question text + the agent's own answer + AI feedback + ✓/✗ status, always-expanded, untruncated.** `QuizResult` gained a `userAnswer` field; it's populated in both `sessionResults` pushes (`handleSubmitAnswer` success + catch) from the in-scope typed `answer`, and in the `allWrongReview` map from `WrongAnswer.userAnswer` (was being dropped). `AnswerReviewCard` rewritten: removed the accordion (`useState`) and the 68-char `result.question.slice(0,68)` truncation; green tint+left-border for correct, red for incorrect, with a "✓ Correcta"/"✗ Incorrecta" pill.
+- **Review list is no longer wrong-only.** `reviewList` = full current-section `results` (correct+incorrect) when not all done; when all sections done it appends the cumulative cross-section wrongs (`allWrongAnswers`) deduped by id. Header string changed from `questionsWrong` ("Preguntas a repasar") to new neutral `answersReview` ("Tus respuestas"). NOTE limitation: after a RESUME, `results` only holds this-session answers (a small "Mostrando las respuestas de esta sesión" note is shown); cross-section *correct* answers can't be shown green on the final screen without a backend route (getWrongAnswers is wrong-only) — accepted.
+- **Aggregate "Puntaje Total" added.** = sum(correct)/sum(answered) across attempted sections, shown only when 2+ sections have data, rendered above "Progreso general". Required threading the per-section `answered` count through `overallSections` (state + prop widened to `{section,correct,total,answered}`; the two `setOverallSections` calls in `handleNext` stopped stripping `answered`). This is DISTINCT from the existing `/55` cert-progress row (which intentionally keeps 55 as denominator).
+- **Admin attempt cards show question text.** `AdminAttempt.tsx` `AnswerCard` now looks up `FALLBACK_QUESTIONS.find(q=>q.id===answer.question_id)?.question` and renders it (omitted if id not in bank); removed dead `questionTextShort` and the `maxHeight:120px` cap on the answer box.
+- New i18n keys (en+es): `answersReview`, `totalScore`, `correctLabel`, `incorrectLabel`, `agentAnswer` (`questionsWrong` kept).
+
+**Session 3 (2026-06-09) — P0 cumulative certification — SHIPPED & DEPLOYED.**
+Lambda live (`/version` = `cumulative-cert-2026-06-09`); frontend committed `b4aede4` + memory `d000c05`,
+pushed to `main` → Amplify auto-deploy. **Fernanda certified** (admin override on one of her attempts
+triggered the cumulative auto-grant — P2 done). Implementation details below (was: "code complete,
+pending deploy").
 Implemented + reviewed via a 4-lens adversarial workflow (7 findings confirmed & all fixed; 8 dismissed
 as latent/pre-existing). Verified: `tsc --noEmit` clean, `node --check lambda/index.mjs` OK, 29/29
 vitest, `vite build` OK.
@@ -356,24 +409,18 @@ Before closing a session, update this file:
 
 ## 14. NEXT PRIORITIES
 
-Re-ordered 2026-06-09 (session 3) — the certification/scoring root cause (§10b) now leads,
-because it blocks the product's entire purpose (agents can't get certified). The admin-panel
-items from session 2 follow.
+Re-ordered 2026-06-09 (session 3). P0 (cumulative certification) is **DONE & DEPLOYED**; the next
+build is the "TU PROGRESO" UI improvement.
 
-**P0 — Make certification reachable — CODE COMPLETE (session 3), PENDING DEPLOY.** See §10b + §11.
-Remaining: deploy (Lambda first, then frontend), then repair Fernanda (P2). Original plan below.
-- Backend (`lambda/index.mjs`): add cumulative cert eligibility from the `answers` table
-  (distinct best grade per `question_id` via `MAX(final_grade)` across `('passed','failed')`
-  attempts, vs tier config `total_questions=55` / `passing_threshold=0.9` and ≤5 errors/section).
-  Auto-grant the cert in `POST /attempts/:id/complete` (return cert status in the response) and on
-  `POST /admin/answers/:id/override`. Add `GET /users/:id/cert-status`.
-- Backend: fix the override-recalc denominator — score a section against its OWN question count and
-  update the `total_questions` column (stop using `config.total_questions=55` for a single section).
-- Frontend (`src/pages/Index.tsx`): drive the cert badge / "justEarned" from the backend `cert`
-  field instead of `result.passed && sectionsDone`; fix `handleDiscardAndStart` to pass the section's
-  question count, not `quizConfig` (55). Extend `ScoreResult`/api types (`src/lib/api.ts`).
-- Deploy: `lambda.zip` → **ldk-quiz-api** (the `wsi4x…` URL — NOT the grader); push frontend to
-  `main` for Amplify. Then repair Fernanda's data (P2).
+**✅ P0 — Make certification reachable — DONE & DEPLOYED (session 3).** See §10b + §11. Cumulative
+server-side auto-grant; per-section denominator fixes; new `GET /users/:id/cert-status`. Lambda live
+(`/version`=`cumulative-cert-2026-06-09`), frontend pushed `b4aede4` → Amplify. **P2 (repair Fernanda)
+also DONE** — she's certified.
+
+**NEXT — "TU PROGRESO" home-screen improvement.** See **§10c** for the full spec. Show correct/wrong/
+unanswered per section, fix the stale-green-on-retake bug, and fix the "56/56" footer (reuse
+`GET /cert-status`). ⚠️ **One open product question first:** the retake scoring model (keep-best vs
+replace vs wipe) — ASK the user before building.
 
 **P1 — Stop the grader fabricating wrong answers.** See §10b Layer 3. On grader failure return a
 distinct status (e.g. `{error:true}`) so the frontend does NOT persist it as `final_grade=false`

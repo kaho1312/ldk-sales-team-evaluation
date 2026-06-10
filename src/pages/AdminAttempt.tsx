@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { adminGetAttemptDetails, adminOverrideAnswer, getActiveConfig, grantCertification } from "@/lib/api";
 import type { AttemptWithAnswers, Answer, QuizConfig } from "@/lib/api";
 import type { ScoreResult } from "@/lib/scoring";
+import { FALLBACK_QUESTIONS } from "@/lib/questions";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 
@@ -168,10 +169,8 @@ function AnswerCard({ answer, config, attemptId, onOverrideApplied }: AnswerCard
     }
   };
 
-  const questionTextShort =
-    (answer.question_id ?? "").length > 0
-      ? answer.user_answer?.slice(0, 0) // question text not in Answer model; use id display
-      : "";
+  // Question text isn't stored on the Answer row — look it up by id from the bundled bank.
+  const questionText = FALLBACK_QUESTIONS.find((q) => q.id === answer.question_id)?.question;
 
   // Section badge color
   const sectionBadgeStyle =
@@ -202,15 +201,17 @@ function AnswerCard({ answer, config, attemptId, onOverrideApplied }: AnswerCard
         )}
       </div>
 
+      {/* Question text — full, untruncated (omitted if the id isn't in the bundled bank) */}
+      {questionText && (
+        <div className="text-sm text-foreground/90 leading-relaxed">{questionText}</div>
+      )}
+
       {/* User answer */}
       <div>
         <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
           Respuesta del agente
         </div>
-        <div
-          className="text-sm text-foreground bg-secondary/30 border border-border/40 rounded-xl px-3 py-2.5 overflow-y-auto"
-          style={{ maxHeight: "120px" }}
-        >
+        <div className="text-sm text-foreground bg-secondary/30 border border-border/40 rounded-xl px-3 py-2.5 whitespace-pre-wrap">
           {answer.user_answer || <span className="text-muted-foreground italic">Sin respuesta</span>}
         </div>
       </div>

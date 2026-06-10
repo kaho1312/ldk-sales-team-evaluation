@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { LANG, Lang } from "@/lib/i18n";
 
 interface QuizResult {
@@ -7,6 +6,7 @@ interface QuizResult {
   isCorrect: boolean;
   feedback: string;
   correctAnswer: string;
+  userAnswer: string;
 }
 
 interface QuizResultsProps {
@@ -26,7 +26,7 @@ interface QuizResultsProps {
   certified?: boolean;
   sectionCorrect?: number;
   sectionScorePercent?: number;
-  overallSections?: { section: string; correct: number; total: number }[];
+  overallSections?: { section: string; correct: number; total: number; answered: number }[];
   certOnTrack?: boolean | null;
   allWrongAnswers?: QuizResult[];
   onRestart: () => void;
@@ -37,40 +37,66 @@ function sectionName(sec: string, lang: Lang): string {
   return lang === "es" ? `Sección ${sec}` : `Section ${sec}`;
 }
 
+// Always-expanded review card so a third party can read question + answer + feedback
+// at a glance. Green (correct) / red (incorrect) left border + tint and a status pill
+// make right/wrong obvious while scrolling. No truncation on any text element.
 function AnswerReviewCard({ result, lang }: { result: QuizResult; lang: Lang }) {
-  const [open, setOpen] = useState(false);
+  const t = LANG[lang];
+  const correct = result.isCorrect;
   return (
-    <div className="bg-destructive/5 border border-destructive/10 rounded-lg mb-2 overflow-hidden">
-      <button
-        className="w-full text-left py-2.5 px-3 flex items-start justify-between gap-2"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="text-sm text-muted-foreground leading-snug">
-          {result.id} · {result.question.length > 68 ? result.question.slice(0, 68) + "…" : result.question}
+    <div
+      className={`rounded-lg mb-2 border border-l-4 px-3 py-2.5 space-y-2 ${
+        correct
+          ? "bg-success/5 border-success/20 border-l-success"
+          : "bg-destructive/5 border-destructive/20 border-l-destructive"
+      }`}
+    >
+      {/* Status pill + question id */}
+      <div className="flex items-center justify-between gap-2">
+        <span
+          className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+            correct
+              ? "bg-success/10 text-success border border-success/20"
+              : "bg-destructive/10 text-destructive border border-destructive/20"
+          }`}
+        >
+          {correct ? `✓ ${t.correctLabel}` : `✗ ${t.incorrectLabel}`}
         </span>
-        <span className="text-[11px] text-muted-foreground/50 shrink-0 mt-0.5">{open ? "▴" : "▾"}</span>
-      </button>
-      {open && (
-        <div className="border-t border-destructive/10 px-3 py-2.5 space-y-2">
-          <div className="text-xs text-foreground/70 leading-relaxed">{result.question}</div>
-          {result.feedback && (
-            <div>
-              <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
-                {lang === "es" ? "Retroalimentación IA" : "AI Feedback"}
-              </div>
-              <div className="text-xs text-muted-foreground leading-relaxed">{result.feedback}</div>
-            </div>
-          )}
-          {result.correctAnswer && (
-            <div>
-              <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
-                {lang === "es" ? "Respuesta correcta" : "Correct Answer"}
-              </div>
-              <div className="text-xs text-foreground/80 bg-success/5 border border-success/15 rounded-lg px-2.5 py-2 leading-relaxed">
-                {result.correctAnswer}
-              </div>
-            </div>
-          )}
+        <span className="text-[11px] font-mono text-muted-foreground/60 shrink-0">{result.id}</span>
+      </div>
+
+      {/* Question text — full, untruncated */}
+      <div className="text-sm text-foreground/90 leading-relaxed">{result.question}</div>
+
+      {/* Agent's answer */}
+      <div>
+        <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
+          {t.agentAnswer}
+        </div>
+        <div className="text-xs text-foreground/80 bg-secondary/30 border border-border/40 rounded-lg px-2.5 py-2 leading-relaxed whitespace-pre-wrap">
+          {result.userAnswer || <span className="text-muted-foreground/60 italic">—</span>}
+        </div>
+      </div>
+
+      {/* AI feedback */}
+      {result.feedback && (
+        <div>
+          <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
+            {lang === "es" ? "Retroalimentación IA" : "AI Feedback"}
+          </div>
+          <div className="text-xs text-muted-foreground leading-relaxed">{result.feedback}</div>
+        </div>
+      )}
+
+      {/* Correct answer (only present for wrong answers when the grader returned one) */}
+      {result.correctAnswer && (
+        <div>
+          <div className="text-[10px] font-bold tracking-wider uppercase text-muted-foreground mb-1">
+            {lang === "es" ? "Respuesta correcta" : "Correct Answer"}
+          </div>
+          <div className="text-xs text-foreground/80 bg-success/5 border border-success/15 rounded-lg px-2.5 py-2 leading-relaxed">
+            {result.correctAnswer}
+          </div>
         </div>
       )}
     </div>
@@ -102,10 +128,27 @@ export function QuizResults({
   // Use backend-authoritative values when available (handles resume where sessionResults is partial)
   const displayCorrect = sectionCorrect ?? correctCount;
   const displayWrong = sectionCorrect !== undefined ? totalQuestions - sectionCorrect : wrongCount;
-  // When all sections are done, use full RDS wrong-answer list; otherwise use current session
-  const reviewList = allSectionsDone && allWrongAnswers ? allWrongAnswers : results.filter((r) => !r.isCorrect);
+  // Review list shows the full set of answers for this section (correct + incorrect,
+  // colour-coded) so a reviewer can scan right/wrong at a glance. When all sections are
+  // done, also append the cumulative cross-section wrong answers from RDS (deduped by id
+  // against the current session to avoid duplicate React keys / repeated cards).
+  const reviewList =
+    allSectionsDone && allWrongAnswers
+      ? [...results, ...allWrongAnswers.filter((w) => !results.some((r) => r.id === w.id))]
+      : results;
+  // After a resume, `results` only holds answers given this session (not the full section).
+  const partialSession = !allSectionsDone && totalQuestions > 0 && results.length < totalQuestions;
   const finalScore = sectionScorePercent ?? (totalQuestions > 0 ? Math.round((correctCount / totalQuestions) * 100) : 0);
   const cumulativeScore = cumulativeTotal > 0 ? Math.round((cumulativeCorrect / cumulativeTotal) * 100) : 0;
+
+  // Aggregate score across the sections that have data: total correct ÷ total attempted
+  // (questions answered), shown only once 2+ sections have been attempted. Distinct from
+  // the /55 cert-progress row below, which always uses the full tier as its denominator.
+  const attemptedSections = (overallSections ?? []).filter((s) => s.answered > 0);
+  const totalAttempted = attemptedSections.reduce((n, s) => n + s.answered, 0);
+  const totalCorrectAcross = attemptedSections.reduce((n, s) => n + s.correct, 0);
+  const puntajeTotal = totalAttempted > 0 ? Math.round((totalCorrectAcross / totalAttempted) * 100) : 0;
+  const showPuntajeTotal = attemptedSections.length >= 2;
   // Verdict follows the backend's authoritative cumulative certification when available,
   // so the ✓/✗, pass/fail copy, and retake banner can never disagree with the granted
   // badge. Falls back to the frontend score only if the backend didn't report status.
@@ -213,6 +256,22 @@ export function QuizResults({
         </div>
       </div>
 
+      {/* Aggregate score across attempted sections (correct ÷ attempted) — shown once
+          2+ sections have data, above the per-section breakdown. */}
+      {showPuntajeTotal && (
+        <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 mb-5 flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
+              {t.totalScore}
+            </div>
+            <div className="text-xs text-muted-foreground/70 mt-0.5 tabular-nums">
+              {totalCorrectAcross}/{totalAttempted} {lang === "es" ? "respondidas" : "answered"}
+            </div>
+          </div>
+          <div className="text-4xl font-extrabold tracking-tighter text-primary tabular-nums">{puntajeTotal}%</div>
+        </div>
+      )}
+
       {/* Block 2 — Overall progress */}
       {overallSections && overallSections.length > 0 && (
         <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-5">
@@ -254,12 +313,19 @@ export function QuizResults({
         </span>
       </div>
 
-      {/* Wrong questions list with feedback */}
+      {/* Answers list — full question + agent answer + AI feedback, colour-coded ✓/✗ */}
       {reviewList.length > 0 && (
         <div className="mb-5">
           <div className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground mb-2">
-            {t.questionsWrong}
+            {t.answersReview}
           </div>
+          {partialSession && (
+            <div className="text-[11px] text-muted-foreground/60 mb-2 leading-snug">
+              {lang === "es"
+                ? "Mostrando las respuestas de esta sesión."
+                : "Showing this session's answers."}
+            </div>
+          )}
           {reviewList.map((r) => (
             <AnswerReviewCard key={r.id} result={r} lang={lang} />
           ))}

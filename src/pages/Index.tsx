@@ -97,7 +97,7 @@ export default function Index() {
   const [feedback, setFeedback] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
   const [currentQ, setCurrentQ] = useState(0);
-  const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[]>([]);
+  const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string; userAnswer: string }[]>([]);
 
   // Backend attempt tracking
   const [currentAttemptId, setCurrentAttemptId] = useState<string | null>(null);
@@ -111,9 +111,10 @@ export default function Index() {
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
   const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
   const [sectionStats, setSectionStats] = useState<{ correct: number; scorePercent: number } | null>(null);
-  const [allWrongReview, setAllWrongReview] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string }[] | null>(null);
-  // Overall (cross-section) breakdown for the results screen — derived frontend-side
-  const [overallSections, setOverallSections] = useState<{ section: string; correct: number; total: number }[] | null>(null);
+  const [allWrongReview, setAllWrongReview] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string; userAnswer: string }[] | null>(null);
+  // Overall (cross-section) breakdown for the results screen — derived frontend-side.
+  // `answered` (questions attempted in the section) feeds the aggregate "Puntaje Total".
+  const [overallSections, setOverallSections] = useState<{ section: string; correct: number; total: number; answered: number }[] | null>(null);
   const [certOnTrack, setCertOnTrack] = useState<boolean | null>(null);
   // Authoritative cumulative certification status (backend) for the results screen.
   const [certStatus, setCertStatus] = useState<CertStatus | null>(null);
@@ -352,7 +353,7 @@ export default function Index() {
       }
 
       const storedCorrectAnswer = !correct && data.correct_answer ? data.correct_answer : "";
-      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct, feedback: personalizedFeedback, correctAnswer: storedCorrectAnswer }]);
+      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct, feedback: personalizedFeedback, correctAnswer: storedCorrectAnswer, userAnswer: answer }]);
     } catch {
       setIsCorrect(false);
       const errorFeedback = lang === "es"
@@ -372,7 +373,7 @@ export default function Index() {
           errorFeedback,
         ).catch(() => {});
       }
-      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: false, feedback: errorFeedback, correctAnswer: "" }]);
+      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: false, feedback: errorFeedback, correctAnswer: "", userAnswer: answer }]);
     }
   };
 
@@ -422,7 +423,7 @@ export default function Index() {
                   answered: sa[sec] ?? 0,
                 }))
                 .filter((s) => s.answered > 0);
-              setOverallSections(breakdown.map(({ section, correct, total }) => ({ section, correct, total })));
+              setOverallSections(breakdown);
               const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
               const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
               setCertOnTrack((certInfo.correct + remaining) / JUNIOR_TOTAL_QUESTIONS >= quizConfig.passing_threshold);
@@ -446,7 +447,7 @@ export default function Index() {
                   return { section: sec, correct, total, answered };
                 })
                 .filter((s) => s.answered > 0);
-              setOverallSections(breakdown.map(({ section, correct, total }) => ({ section, correct, total })));
+              setOverallSections(breakdown);
               const grandCorrect = breakdown.reduce((n, s) => n + s.correct, 0);
               const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
               const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
@@ -465,6 +466,7 @@ export default function Index() {
                     isCorrect: false,
                     feedback: w.aiReasoning ?? "",
                     correctAnswer: "",
+                    userAnswer: w.userAnswer ?? "",
                   };
                 }),
               );
