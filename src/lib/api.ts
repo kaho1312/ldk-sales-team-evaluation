@@ -327,6 +327,12 @@ export async function adminSetUserAdmin(userId: string, isAdmin: boolean): Promi
   });
 }
 
+// Hard-delete a user (cascades to their attempts/answers/certifications). The backend
+// blocks self-deletion. Lets an admin free up an email so the person can re-register.
+export async function adminDeleteUser(userId: string): Promise<void> {
+  await apiFetch<void>(`/admin/users/${userId}`, { method: "DELETE" });
+}
+
 // ── Admin — attempt detail with all answers ───────────────────────────────────
 
 export interface AttemptWithAnswers extends QuizAttempt {

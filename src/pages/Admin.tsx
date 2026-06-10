@@ -4,10 +4,12 @@ import {
   adminGetAllUsers,
   adminGetAllAttempts,
   adminSetUserAdmin,
+  adminDeleteUser,
   getQuizConfigs,
   updateQuizConfig,
   exportAttemptsToCSV,
 } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import type { AdminUserRow, QuizConfig, QuizAttempt } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -58,10 +60,13 @@ function fmtDate(iso: string | null | undefined): string {
 
 // ── Tab 1: Agentes ────────────────────────────────────────────────────────────
 function AgentesTab() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<AdminUserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   const handleToggleAdmin = async (userId: string, currentIsAdmin: boolean) => {
     setTogglingAdmin(userId);
@@ -75,6 +80,20 @@ function AgentesTab() {
       toast.error("Error al cambiar acceso admin");
     } finally {
       setTogglingAdmin(null);
+    }
+  };
+
+  const handleDelete = async (userId: string) => {
+    setDeleting(userId);
+    try {
+      await adminDeleteUser(userId);
+      setUsers((prev) => prev.filter((u) => u.id !== userId));
+      toast.success("Usuario eliminado. El correo queda libre para registrarse de nuevo.");
+    } catch {
+      toast.error("Error al eliminar el usuario");
+    } finally {
+      setDeleting(null);
+      setConfirmingDelete(null);
     }
   };
 
@@ -225,8 +244,8 @@ function AgentesTab() {
                     ))}
                   </>
                 )}
-                {/* Admin access toggle */}
-                <div className="pt-2 border-t border-border/30 flex items-center gap-3">
+                {/* Admin access toggle + delete */}
+                <div className="pt-2 border-t border-border/30 flex items-center gap-3 flex-wrap">
                   <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground">
                     Acceso Admin:
                   </span>
@@ -245,6 +264,39 @@ function AgentesTab() {
                         ? "Quitar acceso admin"
                         : "Dar acceso admin"}
                   </button>
+
+                  {/* Delete user — hidden for your own account (backend also blocks self-deletion) */}
+                  {currentUser?.id !== user.id && (
+                    <div className="ml-auto flex items-center gap-2">
+                      {confirmingDelete === user.id ? (
+                        <>
+                          <span className="text-[11px] text-destructive font-semibold">
+                            ¿Eliminar a {user.full_name}? Se borran sus intentos y certificaciones.
+                          </span>
+                          <button
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg border bg-destructive/15 border-destructive/30 text-destructive hover:bg-destructive/25 transition-colors disabled:opacity-50"
+                            disabled={deleting === user.id}
+                            onClick={(e) => { e.stopPropagation(); handleDelete(user.id); }}
+                          >
+                            {deleting === user.id ? "Eliminando..." : "Sí, eliminar"}
+                          </button>
+                          <button
+                            className="text-[11px] font-bold px-2.5 py-1 rounded-lg border border-border/50 text-muted-foreground hover:text-foreground transition-colors"
+                            onClick={(e) => { e.stopPropagation(); setConfirmingDelete(null); }}
+                          >
+                            Cancelar
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="text-[11px] font-bold px-2.5 py-1 rounded-lg border border-destructive/20 text-destructive/80 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                          onClick={(e) => { e.stopPropagation(); setConfirmingDelete(user.id); }}
+                        >
+                          Eliminar usuario
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
