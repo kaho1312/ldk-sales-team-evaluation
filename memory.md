@@ -196,7 +196,7 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 | **Grader marks correct answers wrong on any infra hiccup** | OPEN (P1) | See §10b. `max_tokens:500` truncation / 429 / timeout → fallback `{passed:false,"Error al procesar la evaluación."}` saved as `final_grade=false`. Source of "errores I couldn't reproduce". |
 | "TU PROGRESO" home cards: no correct/wrong; stale green on retake; **56/56** footer | OPEN (NEXT) | See §10c. Cards show only *answered*; retake keeps stale green "28/28"; footer shows >55 because `GET /progress` sums answer rows (non-DISTINCT). Design scoped; one open question (retake scoring model). |
 | Results: "¡Certificada!" badge can show ALONGSIDE the amber "ya no es posible alcanzar el 90%" warning | OPEN (low; pre-existing, surfaced session 4) | `QuizResults` renders `certNotPossible` whenever `certOnTrack===false`, independent of the `certified` flag — so a certified user whose current cumulative is <90% (e.g. test@ldk.lat at 46/55) sees both. NOT caused by the session-4 review-UI work. Quick fix: gate the warning on `!certified`. |
-| Password-reset email DELIVERY not yet confirmed by us | NEEDS USER VERIFICATION | Backend smoke-tested live (routes + `password_resets` query OK). `/auth/forgot` always returns 200 even if the Resend send fails (no-email-leak design), so a 200 ≠ proof of delivery. User to confirm: a real email arrives from `no-reply@ldk.fyi` (ldk.fyi must be **Verified** in Resend) + full forgot→link→/reset→login. The admin "Enviar restablecimiento" button returns 502 if Resend is misconfigured. |
+| Password-reset email delivery | ✅ CONFIRMED WORKING END-TO-END (2026-06-10) | User received the reset email from `no-reply@ldk.fyi` and successfully changed their password via the `/reset?token=` link. Self-service forgot flow fully verified live. (Resend domain ldk.fyi verified.) |
 
 ---
 
@@ -440,6 +440,20 @@ also DONE** — she's certified.
 unanswered per section, fix the stale-green-on-retake bug, and fix the "56/56" footer (reuse
 `GET /cert-status`). ⚠️ **One open product question first:** the retake scoring model (keep-best vs
 replace vs wipe) — ASK the user before building.
+
+**Quick UI follow-ups (requested 2026-06-10, session 4 — small, NOT yet built):**
+1. **Login copy (ES) — `src/pages/Login.tsx`:** change the reset-link text `¿Olvidaste tu contraseña?`
+   → `Olvidé mi contraseña`, and the register prompt `¿No tienes cuenta?` → `No tienes cuenta?` (drop
+   the leading `¿`). Both strings live in `Login.tsx`. (Register.tsx has a mirror `¿Ya tienes cuenta?`
+   — leave it unless the user asks for consistency.)
+2. **Admin answer frame by AI grade — `src/pages/AdminAttempt.tsx` (`AnswerCard`):** put a colored
+   frame on the "RESPUESTA DEL AGENTE" answer box — **green** border when the AI graded correct
+   (`ai_grade===true`), **red** when incorrect (`ai_grade===false`), neutral when `null` — so
+   right/wrong is obvious at a glance (per user screenshot). The card already derives an outer
+   `borderColor` from `final_grade`; this is specifically the inner answer box, keyed to the AI grade.
+3. **Correct/incorrect filter in the admin attempt view — `src/pages/AdminAttempt.tsx`:** add a filter
+   control at the top (near "Resumen de puntaje") with Todas / Correctas / Incorrectas, filtering the
+   answers list below by effective `final_grade`. Helps navigate long attempts (e.g. 28-answer Sec. A).
 
 **P1 — Stop the grader fabricating wrong answers.** See §10b Layer 3. On grader failure return a
 distinct status (e.g. `{error:true}`) so the frontend does NOT persist it as `final_grade=false`
