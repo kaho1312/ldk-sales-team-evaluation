@@ -11,7 +11,7 @@ const ADMIN_EMAILS = new Set(['kay@ldk.lat', 'fernanda@ldk.lat', 'joaquin.g@ldk.
 // ── Password-reset / email (Resend) config ─────────────────────────────────────
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://quiz.ldk.fyi';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
-const RESET_FROM = process.env.RESET_FROM || 'LDK Ventas <no-reply@ldk.lat>';
+const RESET_FROM = process.env.RESET_FROM || 'LDK Ventas <no-reply@ldk.fyi>';
 const RESET_TTL_SELF = 60 * 60;          // self-service "forgot password": 1 hour
 const RESET_TTL_INVITE = 60 * 60 * 72;   // admin-sent invite: 72 hours
 
