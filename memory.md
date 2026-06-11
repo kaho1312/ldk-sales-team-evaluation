@@ -1,6 +1,6 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-06-10 (session 4 — results-review UI: question text + agent answer in review cards, aggregate "Puntaje Total", green/red correct-incorrect highlighting; admin attempt cards now show question text)
+# Last updated: 2026-06-10 (session 4 — SHIPPED & DEPLOYED: (1) results-review UI — question+agent-answer cards, aggregate "Puntaje Total", green/red correct/incorrect, admin attempt cards show question text; (2) admin "Eliminar usuario" button — unblocked Ana; (3) email-based password reset via Resend — self-service "¿Olvidaste tu contraseña?" + admin "Enviar restablecimiento"; migration 003 applied, Lambda + frontend live)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -79,8 +79,13 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 | `VITE_GRADER_URL` | Frontend build | grader Lambda URL |
 | `VITE_GRADER_KEY` | Frontend build (optional) | sent as `x-api-key` if present |
 | `JWT_SECRET` | `ldk-quiz-api` Lambda env | HS256 signing key (defaults to insecure literal if unset — **set in prod**) |
-| `DB_HOST` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `ldk-quiz-api` Lambda env | RDS connection (`DB_NAME` defaults `ldk_quiz`) |
+| `DB_HOST` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `ldk-quiz-api` Lambda env | RDS connection (`DB_NAME` defaults `ldk_quiz`; user `LDKadmin`). RDS is reachable from the dev machine (TCP 3306 open) — one-off `mysql2` scripts can run migrations. |
 | `ANTHROPIC_API_KEY` | `ldk-quiz-grader` Lambda env | Anthropic API auth |
+| `RESEND_API_KEY` | `ldk-quiz-api` Lambda env | **Set (session 4).** Resend API key for password-reset emails (raw `fetch` to `api.resend.com`). Required for reset emails to send. |
+| `RESET_FROM` | `ldk-quiz-api` Lambda env (optional) | Reset email sender. Defaults to `LDK Ventas <no-reply@ldk.fyi>` (Resend-verified domain = **ldk.fyi**). |
+| `APP_BASE_URL` | `ldk-quiz-api` Lambda env (optional) | Base URL for reset links. Defaults to `https://quiz.ldk.fyi`. |
+
+**New routes (session 4, `ldk-quiz-api`):** `POST /auth/forgot` (public), `POST /auth/reset` (public), `POST /admin/users/:id/send-reset` (admin), `DELETE /admin/users/:id` (now wired into Admin UI). `/version` = `password-reset-2026-06-10`. New table `password_resets` (migration `003_password_resets.sql`, applied).
 
 ---
 
@@ -190,6 +195,8 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 | **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
 | **Grader marks correct answers wrong on any infra hiccup** | OPEN (P1) | See §10b. `max_tokens:500` truncation / 429 / timeout → fallback `{passed:false,"Error al procesar la evaluación."}` saved as `final_grade=false`. Source of "errores I couldn't reproduce". |
 | "TU PROGRESO" home cards: no correct/wrong; stale green on retake; **56/56** footer | OPEN (NEXT) | See §10c. Cards show only *answered*; retake keeps stale green "28/28"; footer shows >55 because `GET /progress` sums answer rows (non-DISTINCT). Design scoped; one open question (retake scoring model). |
+| Results: "¡Certificada!" badge can show ALONGSIDE the amber "ya no es posible alcanzar el 90%" warning | OPEN (low; pre-existing, surfaced session 4) | `QuizResults` renders `certNotPossible` whenever `certOnTrack===false`, independent of the `certified` flag — so a certified user whose current cumulative is <90% (e.g. test@ldk.lat at 46/55) sees both. NOT caused by the session-4 review-UI work. Quick fix: gate the warning on `!certified`. |
+| Password-reset email DELIVERY not yet confirmed by us | NEEDS USER VERIFICATION | Backend smoke-tested live (routes + `password_resets` query OK). `/auth/forgot` always returns 200 even if the Resend send fails (no-email-leak design), so a 200 ≠ proof of delivery. User to confirm: a real email arrives from `no-reply@ldk.fyi` (ldk.fyi must be **Verified** in Resend) + full forgot→link→/reset→login. The admin "Enviar restablecimiento" button returns 502 if Resend is misconfigured. |
 
 ---
 
@@ -447,12 +454,25 @@ to grant Junior; discard her in-progress attempt #4 (Section A, 1 answer) so it 
 (current Scenarios 1–2 only cover the dead localStorage path). Fix "discarded attempts pollute
 cumulative counts" (§10) — though the best-grade-wins cumulative model already tolerates it for cert.
 
-**Admin panel (from session 2, still open):**
-- Human review of wrong/failed answers — wire up UI (`POST /admin/answers/:id/override` + recalc
-  exist; note recalc denominator is being fixed in P0).
+**Admin panel — remaining open items:**
+- Human review of wrong/failed answers — `POST /admin/answers/:id/override` + recalc exist and
+  `AdminAttempt` cards now show the question text (session 4); the override/grade UX is usable but
+  could use polish (and an audit log).
 - Question upload interface — add/edit/delete Junior questions without touching code (CSV parser +
   `quiz_configs.questions_source_url` exist as a starting point).
-- Hardening — role-guard routes, audit log of overrides.
+- Hardening — role-guard routes, **audit log of overrides + password resets**.
+- Small fix: gate the results-screen `certNotPossible` warning on `!certified` (see §10).
+
+**Done 2026-06-10 (session 4):**
+- Results-review UI — review cards show question text + agent answer + AI feedback + green ✓/red ✗,
+  always-expanded/untruncated; aggregate "Puntaje Total" (correct÷attempted) above the per-section
+  breakdown; `AdminAttempt` cards show the question text. Verified at runtime (Playwright). Pushed/live.
+- Admin "Eliminar usuario" button wired to the existing `DELETE /admin/users/:id` — used to unblock
+  Ana (ana@ldk.lat), who re-registered successfully.
+- Email-based password reset via **Resend** — migration `003` applied; `POST /auth/forgot`,
+  `POST /auth/reset`, `POST /admin/users/:id/send-reset` live; `/forgot` + `/reset` pages, Login
+  "¿Olvidaste tu contraseña?" link, Admin "Enviar restablecimiento" button. Backend smoke-tested;
+  frontend live. **Only the real email-delivery leg is left for the user to confirm** (see §10).
 
 **Done 2026-06-09 (session 2):** Admin access for Kay (guard honors `ADMIN_EMAILS` + self-heals
 `is_admin=1`); Fernanda deleted to re-register fresh; `GET /admin/users` confirmed only 3 users.
