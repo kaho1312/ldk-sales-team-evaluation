@@ -154,46 +154,48 @@ export default function Index() {
   const sectionCounts = useMemo(() => getSectionCounts(allQuestions, tier), [allQuestions, tier]);
   const q = sessionQuestions[currentQ];
 
-  // ── Load backend data on mount ──────────────────────────────────────────
+  // ── Load backend data on mount / tier change ────────────────────────────
+  // `cancelled` guards against a race: switching tiers re-runs this effect, but
+  // the PREVIOUS tier's in-flight requests can resolve later and overwrite the
+  // new tier's state (esp. when the old tier has lots of data / slow queries).
+  // The cleanup flips `cancelled` so stale responses are dropped.
   useEffect(() => {
     if (!user) return;
+    let cancelled = false;
 
-    // Check backend for all in-progress attempts (current tier)
-    checkForActiveSessions(user.id, dbTier);
+    // In-progress attempts for the CURRENT tier
+    loadActiveSessions(user.id, dbTier).then((m) => { if (!cancelled) setActiveSessions(m); });
 
-    // Load certifications from backend and sync to local cache (all tiers)
+    // Certifications are the SOURCE OF TRUTH for badges (DB-authoritative). Also
+    // reconcile the localStorage cache so a stale/phantom tier can't linger.
     getUserCertifications(user.id).then((certs) => {
+      if (cancelled) return;
       const fromDb = new Set(certs.map((c) => tierKey(c.certification_tier)));
-      // Merge with local (local may have data not yet in DB during migration window)
-      const merged = new Set([...getEarnedTiersLocal(agentKey), ...fromDb]);
-      setEarnedTiers(merged);
-      // Sync to localStorage
-      for (const certTier of fromDb) {
-        saveEarnedTierLocal(agentKey, certTier);
+      setEarnedTiers(fromDb);
+      for (const t of ALL_TIERS) {
+        if (fromDb.has(t)) saveEarnedTierLocal(agentKey, t);
+        else localStorage.removeItem(EARNED_TIER_KEY(agentKey, t));
       }
     });
 
-    // Load progress from backend (current tier)
-    getUserProgress(user.id, dbTier).then(setProgressData);
-
-    // Load completed sections + per-section progress (current tier)
-    getCompletedSections(user.id, dbTier).then(setCompletedSections);
-    getSectionProgress(user.id, dbTier).then(setSectionProgress);
-
-    // Load quiz config (current tier)
+    // Progress / sections / config for the CURRENT tier
+    getUserProgress(user.id, dbTier).then((p) => { if (!cancelled) setProgressData(p); });
+    getCompletedSections(user.id, dbTier).then((s) => { if (!cancelled) setCompletedSections(s); });
+    getSectionProgress(user.id, dbTier).then((s) => { if (!cancelled) setSectionProgress(s); });
     getActiveConfig(dbTier).then((config) => {
-      if (config) {
-        setQuizConfig({
-          total_questions: config.total_questions,
-          passing_threshold: config.passing_threshold,
-        });
-      }
+      if (cancelled || !config) return;
+      setQuizConfig({
+        total_questions: config.total_questions,
+        passing_threshold: config.passing_threshold,
+      });
     });
 
+    return () => { cancelled = true; };
   }, [user?.id, dbTier]);
 
-  // ── Check all in-progress attempts for all sections ──────────────────────
-  async function checkForActiveSessions(userId: string, tierStr: string) {
+  // ── Load all in-progress attempts for the current tier (returns the map so
+  //    callers can apply it under a cancellation guard) ──────────────────────
+  async function loadActiveSessions(userId: string, tierStr: string) {
     try {
       const sessions = await getActiveAttempts(userId, tierStr);
       const map: Record<string, { attemptId: string; answeredCount: number }> = {};
@@ -202,20 +204,22 @@ export default function Index() {
           map[s.section] = { attemptId: s.attemptId, answeredCount: s.answeredCount };
         }
       }
-      setActiveSessions(map);
+      return map;
     } catch {
-      setActiveSessions({});
+      return {};
     }
   }
 
   // Refresh progress, sections and active sessions after returning to start screen
+  // (same cancellation guard as the mount effect).
   useEffect(() => {
-    if (screen === "start" && user) {
-      getUserProgress(user.id, dbTier).then(setProgressData);
-      getCompletedSections(user.id, dbTier).then(setCompletedSections);
-      getSectionProgress(user.id, dbTier).then(setSectionProgress);
-      checkForActiveSessions(user.id, dbTier);
-    }
+    if (screen !== "start" || !user) return;
+    let cancelled = false;
+    getUserProgress(user.id, dbTier).then((p) => { if (!cancelled) setProgressData(p); });
+    getCompletedSections(user.id, dbTier).then((s) => { if (!cancelled) setCompletedSections(s); });
+    getSectionProgress(user.id, dbTier).then((s) => { if (!cancelled) setSectionProgress(s); });
+    loadActiveSessions(user.id, dbTier).then((m) => { if (!cancelled) setActiveSessions(m); });
+    return () => { cancelled = true; };
   }, [screen, user?.id, dbTier]);
 
   // ── Switch certification tier — reset all per-tier state so nothing bleeds ──
