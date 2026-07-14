@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Tier = "Junior" | "Mid-Level" | "Senior";
-export type Section = "A" | "B" | "C" | "All";
+export type Section = "A" | "B" | "C" | "D" | "E" | "F" | "All";
 
 export interface QuizQuestion {
   id: string;
@@ -52,7 +52,50 @@ export const SECTION_CONFIG: Record<Section, {
   "A": { label: "Sección A", description: "Operación diaria y producto" },
   "B": { label: "Sección B", description: "Herramientas del día a día (Acordeón)" },
   "C": { label: "Sección C", description: "Plataformas (CORAA, ODS)" },
+  "D": { label: "Sección D", description: "Canales" },
+  "E": { label: "Sección E", description: "CORAA y operación" },
+  "F": { label: "Sección F", description: "Pricing" },
   "All": { label: "All Sections", description: "Applies to all sections" },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-TIER SECTION STRUCTURE — single source of truth for which sections a tier
+// has and how each is labelled. Every "how many sections?" / section-list / label
+// lookup should read from here so the tier flows never desync.
+//   Junior    → A/B/C (3 sections, 55 questions)
+//   Mid-Level → A/B/C/D/E/F (6 sections, 60 questions)
+//   Senior    → none yet
+// ─────────────────────────────────────────────────────────────────────────────
+export const TIER_SECTIONS: Record<Tier, Section[]> = {
+  "Junior": ["A", "B", "C"],
+  "Mid-Level": ["A", "B", "C", "D", "E", "F"],
+  "Senior": [],
+};
+
+export interface SectionMeta {
+  title_es: string;
+  title_en: string;
+  desc_es: string;
+  desc_en: string;
+}
+
+// Labels differ per tier for the SAME letter (Junior A = daily operations,
+// Mid-Level A = Value Engine), so metadata is keyed by tier THEN section.
+export const TIER_SECTION_META: Record<Tier, Partial<Record<Section, SectionMeta>>> = {
+  "Junior": {
+    A: { title_es: "Sección A", title_en: "Section A", desc_es: "Operación diaria y producto", desc_en: "Daily operations & product" },
+    B: { title_es: "Sección B", title_en: "Section B", desc_es: "Herramientas del día a día", desc_en: "Daily tools (Acordeón)" },
+    C: { title_es: "Sección C", title_en: "Section C", desc_es: "Plataformas (CORAA, ODS)", desc_en: "Platforms (CORAA, ODS)" },
+  },
+  "Mid-Level": {
+    A: { title_es: "Sección A", title_en: "Section A", desc_es: "Value Engine aplicado", desc_en: "Applied Value Engine" },
+    B: { title_es: "Sección B", title_en: "Section B", desc_es: "Producto (Master File)", desc_en: "Product (Master File)" },
+    C: { title_es: "Sección C", title_en: "Section C", desc_es: "Acordeón y respuestas", desc_en: "Acordeón & responses" },
+    D: { title_es: "Sección D", title_en: "Section D", desc_es: "Canales", desc_en: "Channels" },
+    E: { title_es: "Sección E", title_en: "Section E", desc_es: "CORAA y operación", desc_en: "CORAA & operations" },
+    F: { title_es: "Sección F", title_en: "Section F", desc_es: "Pricing", desc_en: "Pricing" },
+  },
+  "Senior": {},
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -119,6 +162,85 @@ export const FALLBACK_QUESTIONS: QuizQuestion[] = [
   { id:"JR-C-53", tier:"Junior", section:"C", question:"¿Cuáles son las condiciones especiales en Princess, Vidanta, Hard Rock Riviera Maya y Hyatt Ziva?", modelAnswer:"Princess: main gate. Vidanta: Central Lobby. Hard Rock: confirmar Hacienda (familiar) o Heaven (azul). Hyatt Ziva: dos propiedades (Cancún y Riviera Maya) — siempre confirmar cuál." },
   { id:"JR-C-54", tier:"Junior", section:"C", question:"¿Qué significa DMC?", modelAnswer:"Destination Management Company — empresa especializada en planificación, coordinación y operación de servicios turísticos dentro de un destino específico." },
   { id:"JR-C-55", tier:"Junior", section:"C", question:"¿En qué año se fundaron LDM y KTM?", modelAnswer:"2014." },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MID-LEVEL — 60 questions across 6 sections (A–F)
+  //   A: Value Engine aplicado (8)   B: Producto/Master File (14)
+  //   C: Acordeón y respuestas (10)  D: Canales (8)
+  //   E: CORAA y operación (10)      F: Pricing (10)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // ── Section A — Value Engine aplicado ──
+  { id:"ML-A-01", tier:"Mid-Level", section:"A", question:"Si un cliente te hace la misma pregunta varias veces durante la conversación, ¿qué significa esto sobre tu explicación y qué deberías cambiar?", modelAnswer:"Significa que la explicación no fue clara o no generó confianza. Se debe reorganizar la respuesta, simplificarla y abordar la duda de forma más directa." },
+  { id:"ML-A-02", tier:"Mid-Level", section:"A", question:"Si el cliente dice \"sí entiendo\", pero no toma decisión, ¿qué elemento falta en tu comunicación?", modelAnswer:"Falta un siguiente paso claro que lo guíe a decidir." },
+  { id:"ML-A-03", tier:"Mid-Level", section:"A", question:"Si envías un mensaje muy completo pero el cliente sigue confundido, ¿cuál fue el problema principal?", modelAnswer:"La falta de claridad. Dar mucha información sin estructura no genera valor." },
+  { id:"ML-A-04", tier:"Mid-Level", section:"A", question:"Si un cliente está comparando muchas opciones y no logra decidir, ¿cómo debes intervenir?", modelAnswer:"Reduciendo opciones y recomendando una alternativa concreta." },
+  { id:"ML-A-05", tier:"Mid-Level", section:"A", question:"Si el cliente sigue pidiendo más detalles después de varias explicaciones, ¿qué indica esto sobre la conversación?", modelAnswer:"Que no se ha generado suficiente confianza ni claridad." },
+  { id:"ML-A-06", tier:"Mid-Level", section:"A", question:"¿Qué sucede cuando das demasiada información sin orden ni prioridad?", modelAnswer:"Se genera confusión y se frena la decisión." },
+  { id:"ML-A-07", tier:"Mid-Level", section:"A", question:"¿Qué debe lograr cada mensaje que envías al cliente?", modelAnswer:"Que el cliente avance hacia una decisión con mayor claridad." },
+  { id:"ML-A-08", tier:"Mid-Level", section:"A", question:"¿Qué efecto tiene presionar al cliente para que compre rápido?", modelAnswer:"Genera desconfianza y resistencia." },
+
+  // ── Section B — Producto (Master File) ──
+  { id:"ML-B-01", tier:"Mid-Level", section:"B", question:"Si un cliente asume que un tour incluye algo que no aparece en la descripción, ¿cómo debes manejar la situación antes de cerrar?", modelAnswer:"Aclarando explícitamente qué incluye y qué no, antes de confirmar." },
+  { id:"ML-B-02", tier:"Mid-Level", section:"B", question:"Si el cliente está fuera de la zona incluida en el transporte, ¿qué pasos debes seguir antes de confirmar el servicio?", modelAnswer:"Verificar si hay suplemento o alternativa disponible." },
+  { id:"ML-B-03", tier:"Mid-Level", section:"B", question:"Si el cliente quiere modificar el itinerario base del tour, ¿cómo debes tratar esa solicitud?", modelAnswer:"Evaluarla como servicio personalizado o escalarla." },
+  { id:"ML-B-04", tier:"Mid-Level", section:"B", question:"Si el cliente no entiende cuánto dura realmente el tour, ¿cómo debes explicarlo?", modelAnswer:"Separando claramente traslados y actividad principal." },
+  { id:"ML-B-05", tier:"Mid-Level", section:"B", question:"Si un cliente quiere agregar una actividad adicional que no está incluida, ¿qué debes hacer antes de confirmarla?", modelAnswer:"Validar disponibilidad real." },
+  { id:"ML-B-06", tier:"Mid-Level", section:"B", question:"Si el cliente cree que todo el tour es flexible, ¿qué debes aclarar?", modelAnswer:"Qué partes son fijas y cuáles pueden cambiar." },
+  { id:"ML-B-07", tier:"Mid-Level", section:"B", question:"Si el cliente cuestiona un cargo adicional obligatorio, ¿cómo debes explicarlo?", modelAnswer:"Como un costo externo que no controlamos." },
+  { id:"ML-B-08", tier:"Mid-Level", section:"B", question:"Si el cliente pide cambiar un horario fijo, ¿qué debes evaluar antes de aceptar?", modelAnswer:"El impacto en la operación." },
+  { id:"ML-B-09", tier:"Mid-Level", section:"B", question:"Si el cliente compara tu tour con uno más barato, ¿cómo debes responder?", modelAnswer:"Explicando diferencias de valor, no solo precio." },
+  { id:"ML-B-10", tier:"Mid-Level", section:"B", question:"Si el cliente no pregunta por restricciones, ¿qué responsabilidad tienes tú?", modelAnswer:"Anticiparlas y comunicarlas." },
+  { id:"ML-B-11", tier:"Mid-Level", section:"B", question:"Si el cliente te pregunta algo que no está claro en el producto, ¿qué debes hacer?", modelAnswer:"Confirmar antes de responder." },
+  { id:"ML-B-12", tier:"Mid-Level", section:"B", question:"Si el cliente pide garantía sobre el clima, ¿cómo debes responder correctamente?", modelAnswer:"Explicando que no se puede garantizar y detallando políticas." },
+  { id:"ML-B-13", tier:"Mid-Level", section:"B", question:"Si el cliente solicita algo fuera del alcance del tour, ¿qué debes evitar hacer?", modelAnswer:"Evitar asumir o prometer sin validar." },
+  { id:"ML-B-14", tier:"Mid-Level", section:"B", question:"¿Cuál es el error más grave que puedes cometer al explicar un tour?", modelAnswer:"Prometer algo que no está incluido." },
+
+  // ── Section C — Acordeón y respuestas ──
+  { id:"ML-C-01", tier:"Mid-Level", section:"C", question:"Si un cliente hace una pregunta sencilla, ¿cómo debe ser tu respuesta?", modelAnswer:"Directa, clara y sin información innecesaria." },
+  { id:"ML-C-02", tier:"Mid-Level", section:"C", question:"Si un cliente pide muchos detalles complejos en chat, ¿qué canal es más adecuado y por qué?", modelAnswer:"Email, porque permite estructurar mejor la información." },
+  { id:"ML-C-03", tier:"Mid-Level", section:"C", question:"¿Qué problema genera una respuesta larga sin estructura?", modelAnswer:"Confusión y pérdida de atención." },
+  { id:"ML-C-04", tier:"Mid-Level", section:"C", question:"Si el cliente necesita una respuesta rápida, ¿cómo debes estructurarla?", modelAnswer:"Clara, corta y organizada." },
+  { id:"ML-C-05", tier:"Mid-Level", section:"C", question:"Si presentas demasiadas opciones al cliente, ¿qué efecto puede tener?", modelAnswer:"Paraliza la decisión." },
+  { id:"ML-C-06", tier:"Mid-Level", section:"C", question:"Si el cliente deja de responder después de un mensaje largo, ¿qué pudo haber pasado?", modelAnswer:"Se saturó de información." },
+  { id:"ML-C-07", tier:"Mid-Level", section:"C", question:"Si el cliente hace una pregunta directa, ¿cómo debes responder?", modelAnswer:"Responder primero y luego ampliar si es necesario." },
+  { id:"ML-C-08", tier:"Mid-Level", section:"C", question:"Si el cliente necesita confirmación rápida, ¿cómo debe ser tu respuesta?", modelAnswer:"Concreta y segura." },
+  { id:"ML-C-09", tier:"Mid-Level", section:"C", question:"¿Qué transmite una respuesta genérica al cliente?", modelAnswer:"Falta de atención y reduce confianza." },
+  { id:"ML-C-10", tier:"Mid-Level", section:"C", question:"¿Qué elemento nunca debe faltar en una respuesta?", modelAnswer:"El siguiente paso claro." },
+
+  // ── Section D — Canales ──
+  { id:"ML-D-01", tier:"Mid-Level", section:"D", question:"Si un cliente pide una cotización completa por chat, ¿qué debes hacer?", modelAnswer:"Dar resumen y mover a email." },
+  { id:"ML-D-02", tier:"Mid-Level", section:"D", question:"Si acuerdas algo en llamada, ¿qué debes hacer después?", modelAnswer:"Confirmarlo por escrito." },
+  { id:"ML-D-03", tier:"Mid-Level", section:"D", question:"Si un cliente OTA pide un upgrade pagado, ¿qué debes hacer?", modelAnswer:"No vender; solo asistir." },
+  { id:"ML-D-04", tier:"Mid-Level", section:"D", question:"Si hablas con un cliente B2B, ¿cómo debe ser tu comunicación?", modelAnswer:"Clara y reenviable." },
+  { id:"ML-D-05", tier:"Mid-Level", section:"D", question:"Si hablas con un cliente B2C, ¿cómo debe ser tu comunicación?", modelAnswer:"Simple y directa." },
+  { id:"ML-D-06", tier:"Mid-Level", section:"D", question:"Si el cliente pide cambios por WhatsApp, ¿qué debes hacer?", modelAnswer:"Documentarlo en sistema." },
+  { id:"ML-D-07", tier:"Mid-Level", section:"D", question:"Si el cliente usa un tono informal, ¿cómo debes responder?", modelAnswer:"Manteniendo profesionalismo." },
+  { id:"ML-D-08", tier:"Mid-Level", section:"D", question:"Si el cliente no decide, ¿qué debes hacer?", modelAnswer:"Guiarlo con una recomendación clara." },
+
+  // ── Section E — CORAA y operación ──
+  { id:"ML-E-01", tier:"Mid-Level", section:"E", question:"Si hay un cambio en el horario del servicio, ¿dónde debe registrarse y por qué?", modelAnswer:"En Observ. OP, porque afecta la ejecución." },
+  { id:"ML-E-02", tier:"Mid-Level", section:"E", question:"Si hay un cambio en el precio, ¿dónde se registra?", modelAnswer:"En Observ. AD." },
+  { id:"ML-E-03", tier:"Mid-Level", section:"E", question:"Si el cliente tiene una preferencia especial, ¿dónde se documenta?", modelAnswer:"Special Requests." },
+  { id:"ML-E-04", tier:"Mid-Level", section:"E", question:"¿Por qué es un error dejar cambios solo en WhatsApp?", modelAnswer:"Porque no queda registro oficial." },
+  { id:"ML-E-05", tier:"Mid-Level", section:"E", question:"¿Qué riesgo genera una reserva incompleta?", modelAnswer:"Errores en la operación." },
+  { id:"ML-E-06", tier:"Mid-Level", section:"E", question:"Si operación no tiene información suficiente, ¿qué sucede?", modelAnswer:"Debe improvisar." },
+  { id:"ML-E-07", tier:"Mid-Level", section:"E", question:"¿Cómo debe ser un handoff correcto?", modelAnswer:"Claro, completo y sin dudas." },
+  { id:"ML-E-08", tier:"Mid-Level", section:"E", question:"Si no documentas una necesidad especial, ¿qué puede pasar?", modelAnswer:"Mala experiencia del cliente." },
+  { id:"ML-E-09", tier:"Mid-Level", section:"E", question:"¿Qué permite una buena documentación?", modelAnswer:"Ejecución sin errores." },
+  { id:"ML-E-10", tier:"Mid-Level", section:"E", question:"¿Qué ocurre si no escalas un problema a tiempo?", modelAnswer:"Se convierte en un problema mayor." },
+
+  // ── Section F — Pricing ──
+  { id:"ML-F-01", tier:"Mid-Level", section:"F", question:"Si un cliente pide descuento de inmediato, ¿cómo debes responder correctamente?", modelAnswer:"Reforzando valor antes de considerar cualquier ajuste." },
+  { id:"ML-F-02", tier:"Mid-Level", section:"F", question:"Si el cliente compara precios con otra opción, ¿qué debes hacer?", modelAnswer:"Explicar diferencias de valor." },
+  { id:"ML-F-03", tier:"Mid-Level", section:"F", question:"Si el cliente no percibe valor, ¿qué debes ajustar?", modelAnswer:"La forma de comunicar." },
+  { id:"ML-F-04", tier:"Mid-Level", section:"F", question:"Si el cliente quiere negociar, ¿qué debes mantener?", modelAnswer:"La estructura de precios." },
+  { id:"ML-F-05", tier:"Mid-Level", section:"F", question:"Si el cliente solo busca precio bajo, ¿qué debes evaluar?", modelAnswer:"Si es el cliente adecuado." },
+  { id:"ML-F-06", tier:"Mid-Level", section:"F", question:"Si el cliente duda por precio, ¿qué debes reforzar?", modelAnswer:"Confianza y valor." },
+  { id:"ML-F-07", tier:"Mid-Level", section:"F", question:"Si el cliente pide una excepción, ¿qué debes hacer?", modelAnswer:"Evaluar o escalar." },
+  { id:"ML-F-08", tier:"Mid-Level", section:"F", question:"¿Qué pasa si das precio sin contexto?", modelAnswer:"Genera objeciones." },
+  { id:"ML-F-09", tier:"Mid-Level", section:"F", question:"¿Qué efecto tiene un precio bien explicado?", modelAnswer:"Reduce resistencia." },
+  { id:"ML-F-10", tier:"Mid-Level", section:"F", question:"¿Cómo sabes que una venta fue correcta?", modelAnswer:"El cliente entiende, confía y decide con claridad." },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +322,7 @@ export function parseQuestionsFromCSV(csvText: string): {
     colIdx >= 0 ? (row[colIdx] ?? "").trim() : "";
 
   const VALID_TIERS    = ["Junior","Mid-Level","Senior"] as const;
-  const VALID_SECTIONS = ["A","B","C","All"] as const;
+  const VALID_SECTIONS = ["A","B","C","D","E","F","All"] as const;
 
   const questions: QuizQuestion[] = [];
 
@@ -274,12 +396,11 @@ export function getByTierAndSection(
   );
 }
 
-export function getSectionCounts(questions: QuizQuestion[], tier: Tier) {
+export function getSectionCounts(questions: QuizQuestion[], tier: Tier): Record<string, number> {
   const filtered = getByTier(questions, tier);
-  return {
-    A:   filtered.filter((q) => q.section === "A"   || q.section === "All").length,
-    B:   filtered.filter((q) => q.section === "B"   || q.section === "All").length,
-    C:   filtered.filter((q) => q.section === "C"   || q.section === "All").length,
-    All: filtered.length,
-  };
+  const counts: Record<string, number> = { All: filtered.length };
+  for (const sec of TIER_SECTIONS[tier]) {
+    counts[sec] = filtered.filter((q) => q.section === sec || q.section === "All").length;
+  }
+  return counts;
 }

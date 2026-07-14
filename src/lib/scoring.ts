@@ -12,11 +12,9 @@
 // Used by the results screen for certification-progress (% of 55) calculations.
 export const JUNIOR_TOTAL_QUESTIONS = 55;
 
-export interface SectionErrors {
-  A: number;
-  B: number;
-  C: number;
-}
+// Per-section error/count map. Keys are section letters (Junior A/B/C, Mid-Level
+// A–F); a section is present only once it has data. Consumers index by letter.
+export type SectionErrors = Record<string, number>;
 
 // Cumulative certification status across ALL of a user's completed attempts for a
 // tier (returned by the backend on complete/override and by GET /cert-status).
@@ -63,8 +61,8 @@ export function calculateScore(
       totalCorrect++;
     } else {
       // Questions with section "All" count against section A for error tracking
-      const sec = (answer.section === "All" ? "A" : answer.section) as keyof SectionErrors;
-      if (sec in sectionErrors) sectionErrors[sec]++;
+      const sec = answer.section === "All" ? "A" : answer.section;
+      sectionErrors[sec] = (sectionErrors[sec] || 0) + 1;
     }
   }
 

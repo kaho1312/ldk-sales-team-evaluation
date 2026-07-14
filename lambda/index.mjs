@@ -136,7 +136,7 @@ function calcScore(answers, totalQuestions, passingThreshold = 0.9) {
   let correct = 0;
   for (const a of answers) {
     if (a.final_grade) { correct++; }
-    else { const s = a.section === 'All' ? 'A' : a.section; if (s in errs) errs[s]++; }
+    else { const s = a.section === 'All' ? 'A' : a.section; errs[s] = (errs[s] || 0) + 1; }
   }
   const pct = totalQuestions > 0 ? Math.round((correct / totalQuestions) * 100) : 0;
   const reasons = [];
@@ -170,22 +170,29 @@ async function certEligibility(conn, userId, tier) {
       GROUP BY a.question_id`,
     [userId, tier]
   );
-  const errs = { A: 0, B: 0, C: 0 };
-  const sectionCorrect = { A: 0, B: 0, C: 0 };
-  const sectionAnswered = { A: 0, B: 0, C: 0 };
+  // Dynamic per-section buckets so ANY section is counted — Junior A/B/C and
+  // Mid-Level A–F alike. `correct` counts every distinct question graded correct
+  // regardless of section, so the overall threshold is reachable for every tier.
+  const errs = {};
+  const sectionCorrect = {};
+  const sectionAnswered = {};
   let correct = 0;
   for (const r of rows) {
     const s = r.section === 'All' ? 'A' : r.section;
-    const inSec = s in errs;
-    if (inSec) sectionAnswered[s]++;
-    if (Number(r.best) === 1) { correct++; if (inSec) sectionCorrect[s]++; }
-    else if (inSec) { errs[s]++; }
+    sectionAnswered[s] = (sectionAnswered[s] || 0) + 1;
+    if (Number(r.best) === 1) { correct++; sectionCorrect[s] = (sectionCorrect[s] || 0) + 1; }
+    else { errs[s] = (errs[s] || 0) + 1; }
   }
   const minCorrect = Math.ceil(totalQuestions * threshold);
   const maxErr = Math.floor(totalQuestions * 0.1);
+  // Per-section error caps apply to Junior only. Mid-Level uses the overall
+  // ≥threshold rule alone (product decision 2026-07-14).
+  const enforceSectionCaps = tier === 'junior';
   const reasons = [];
   if (correct < minCorrect) reasons.push(`Puntaje general por debajo del umbral (${correct}/${minCorrect} requeridas de ${totalQuestions})`);
-  for (const [s, e] of Object.entries(errs)) if (e > maxErr) reasons.push(`Sección ${s}: ${e} errores (máximo ${maxErr})`);
+  if (enforceSectionCaps) {
+    for (const [s, e] of Object.entries(errs)) if (e > maxErr) reasons.push(`Sección ${s}: ${e} errores (máximo ${maxErr})`);
+  }
   return {
     correct,
     total_questions: totalQuestions,
@@ -234,7 +241,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'password-reset-2026-06-10', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true });
+    return ok({ version: 'midlevel-2026-07-14', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -485,8 +492,10 @@ export const handler = async (event) => {
          GROUP BY a.section`,
         [seg[1], tier]
       );
+      // Keep A/B/C zero-initialised (Junior shape unchanged); include any other
+      // sections present (Mid-Level D/E/F) so their home-screen bars fill.
       const result = { A: 0, B: 0, C: 0 };
-      for (const r of rows) if (r.section in result) result[r.section] = Number(r.answered);
+      for (const r of rows) result[r.section] = Number(r.answered);
       return ok(result);
     }
 

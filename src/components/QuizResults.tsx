@@ -1,4 +1,5 @@
 import { LANG, Lang } from "@/lib/i18n";
+import { TIER_SECTION_META, Tier, Section } from "@/lib/questions";
 
 interface QuizResult {
   id: string;
@@ -12,6 +13,7 @@ interface QuizResult {
 interface QuizResultsProps {
   lang: Lang;
   agentName: string;
+  tier: Tier;
   earnedTier: string | null;
   section: string;
   results: QuizResult[];
@@ -106,6 +108,7 @@ function AnswerReviewCard({ result, lang }: { result: QuizResult; lang: Lang }) 
 export function QuizResults({
   lang,
   agentName,
+  tier,
   earnedTier,
   section,
   results,
@@ -154,18 +157,14 @@ export function QuizResults({
   // badge. Falls back to the frontend score only if the backend didn't report status.
   const passed = allSectionsDone && (certified ?? cumulativeScore >= 90);
 
-  const sectionLabel =
-    section === "A"
-      ? lang === "es"
-        ? "Sección A – Operación"
-        : "Section A – Operations"
-      : section === "B"
-        ? lang === "es"
-          ? "Sección B – Acordeón"
-          : "Section B – Acordeón"
-        : lang === "es"
-          ? "Sección C – Plataformas"
-          : "Section C – Platforms";
+  // Section label from the tier's metadata (Junior A/B/C, Mid-Level A–F). Falls
+  // back to "Sección X" if a section has no metadata entry.
+  const secMeta = TIER_SECTION_META[tier]?.[section as Section];
+  const secTitle = secMeta
+    ? (lang === "es" ? secMeta.title_es : secMeta.title_en)
+    : (lang === "es" ? `Sección ${section}` : `Section ${section}`);
+  const secDesc = secMeta ? (lang === "es" ? secMeta.desc_es : secMeta.desc_en) : "";
+  const sectionLabel = secDesc ? `${secTitle} – ${secDesc}` : secTitle;
 
   return (
     <div>
@@ -230,12 +229,28 @@ export function QuizResults({
       {/* Just earned Junior badge — gated on the authoritative grant only (justEarned
           is set from the backend cert), never on the frontend-recomputed score. */}
       {justEarned && (
-        <div className="bg-teal-500/10 border border-teal-500/20 rounded-xl py-3 px-4 text-center mb-5">
+        <div
+          className={`rounded-xl py-3 px-4 text-center mb-5 border ${
+            earnedTier === "Mid-Level"
+              ? "bg-blue-500/10 border-blue-500/20"
+              : earnedTier === "Senior"
+                ? "bg-amber-500/10 border-amber-500/20"
+                : "bg-teal-500/10 border-teal-500/20"
+          }`}
+        >
           <div className="text-lg mb-1">🎉</div>
-          <div className="text-sm font-bold text-teal-400">
+          <div
+            className={`text-sm font-bold ${
+              earnedTier === "Mid-Level"
+                ? "text-blue-400"
+                : earnedTier === "Senior"
+                  ? "text-amber-400"
+                  : "text-teal-400"
+            }`}
+          >
             {lang === "es"
-              ? "¡Felicidades! Ahora eres Junior Sales Agent"
-              : "Congratulations! You are now a Junior Sales Agent"}
+              ? `¡Felicidades! Ahora eres ${earnedTier} Sales Agent`
+              : `Congratulations! You are now a ${earnedTier} Sales Agent`}
           </div>
         </div>
       )}

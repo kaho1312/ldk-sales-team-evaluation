@@ -9,11 +9,13 @@ import {
   QuizQuestion,
   FALLBACK_QUESTIONS,
   Section,
+  Tier,
+  TIER_SECTIONS,
+  TIER_SECTION_META,
   getByTierAndSection,
   getSectionCounts,
 } from "@/lib/questions";
 import { saveAnswer, getAgentProgress, getProgressPercent } from "@/lib/progress";
-import { JUNIOR_TOTAL_QUESTIONS } from "@/lib/scoring";
 import type { CertStatus } from "@/lib/scoring";
 import { logout } from "@/lib/auth";
 import { useAuth } from "@/context/AuthContext";
@@ -84,6 +86,12 @@ export default function Index() {
   const [lang, setLang] = useState<Lang>("es");
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
 
+  // Selected certification tier. `dbTier` is the backend/RDS string; `sections`
+  // is this tier's ordered section list (Junior A/B/C, Mid-Level A–F).
+  const [tier, setTier] = useState<Tier>("Junior");
+  const dbTier = tier === "Mid-Level" ? "mid-level" : tier === "Senior" ? "senior" : "junior";
+  const sections = TIER_SECTIONS[tier];
+
   // Certifications — initialized from localStorage cache, refreshed from backend
   const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiersLocal(agentKey));
   const [justEarned, setJustEarned] = useState<string | null>(null);
@@ -109,7 +117,7 @@ export default function Index() {
 
   // Backend progress (async, replaces localStorage progress bar)
   const [progressData, setProgressData] = useState<{ correct: number; total: number; certified: boolean } | null>(null);
-  const [sectionProgress, setSectionProgress] = useState<{ A: number; B: number; C: number }>({ A: 0, B: 0, C: 0 });
+  const [sectionProgress, setSectionProgress] = useState<Record<string, number>>({ A: 0, B: 0, C: 0 });
   const [sectionStats, setSectionStats] = useState<{ correct: number; scorePercent: number } | null>(null);
   const [allWrongReview, setAllWrongReview] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string; userAnswer: string }[] | null>(null);
   // Overall (cross-section) breakdown for the results screen — derived frontend-side.
@@ -136,44 +144,44 @@ export default function Index() {
   const t = LANG[lang];
 
   const sectionQuestions = useMemo(
-    () => getByTierAndSection(allQuestions, "Junior", selectedSection),
-    [allQuestions, selectedSection],
+    () => getByTierAndSection(allQuestions, tier, selectedSection),
+    [allQuestions, tier, selectedSection],
   );
   const sessionQuestions = useMemo(
     () => (testMode ? sectionQuestions.slice(0, 3) : sectionQuestions),
     [sectionQuestions, testMode],
   );
-  const sectionCounts = useMemo(() => getSectionCounts(allQuestions, "Junior"), [allQuestions]);
+  const sectionCounts = useMemo(() => getSectionCounts(allQuestions, tier), [allQuestions, tier]);
   const q = sessionQuestions[currentQ];
 
   // ── Load backend data on mount ──────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
 
-    // Check backend for all in-progress attempts
-    checkForActiveSessions(user.id);
+    // Check backend for all in-progress attempts (current tier)
+    checkForActiveSessions(user.id, dbTier);
 
-    // Load certifications from backend and sync to local cache
+    // Load certifications from backend and sync to local cache (all tiers)
     getUserCertifications(user.id).then((certs) => {
       const fromDb = new Set(certs.map((c) => tierKey(c.certification_tier)));
       // Merge with local (local may have data not yet in DB during migration window)
       const merged = new Set([...getEarnedTiersLocal(agentKey), ...fromDb]);
       setEarnedTiers(merged);
       // Sync to localStorage
-      for (const tier of fromDb) {
-        saveEarnedTierLocal(agentKey, tier);
+      for (const certTier of fromDb) {
+        saveEarnedTierLocal(agentKey, certTier);
       }
     });
 
-    // Load progress from backend
-    getUserProgress(user.id, "junior").then(setProgressData);
+    // Load progress from backend (current tier)
+    getUserProgress(user.id, dbTier).then(setProgressData);
 
-    // Load completed sections + per-section progress
-    getCompletedSections(user.id, "junior").then(setCompletedSections);
-    getSectionProgress(user.id, "junior").then(setSectionProgress);
+    // Load completed sections + per-section progress (current tier)
+    getCompletedSections(user.id, dbTier).then(setCompletedSections);
+    getSectionProgress(user.id, dbTier).then(setSectionProgress);
 
-    // Load quiz config
-    getActiveConfig("junior").then((config) => {
+    // Load quiz config (current tier)
+    getActiveConfig(dbTier).then((config) => {
       if (config) {
         setQuizConfig({
           total_questions: config.total_questions,
@@ -182,12 +190,12 @@ export default function Index() {
       }
     });
 
-  }, [user?.id]);
+  }, [user?.id, dbTier]);
 
   // ── Check all in-progress attempts for all sections ──────────────────────
-  async function checkForActiveSessions(userId: string) {
+  async function checkForActiveSessions(userId: string, tierStr: string) {
     try {
-      const sessions = await getActiveAttempts(userId, "junior");
+      const sessions = await getActiveAttempts(userId, tierStr);
       const map: Record<string, { attemptId: string; answeredCount: number }> = {};
       for (const s of sessions) {
         if (!map[s.section]) {  // SQL orders DESC by answer count — keep the first (most progress) per section
@@ -203,12 +211,28 @@ export default function Index() {
   // Refresh progress, sections and active sessions after returning to start screen
   useEffect(() => {
     if (screen === "start" && user) {
-      getUserProgress(user.id, "junior").then(setProgressData);
-      getCompletedSections(user.id, "junior").then(setCompletedSections);
-      getSectionProgress(user.id, "junior").then(setSectionProgress);
-      checkForActiveSessions(user.id);
+      getUserProgress(user.id, dbTier).then(setProgressData);
+      getCompletedSections(user.id, dbTier).then(setCompletedSections);
+      getSectionProgress(user.id, dbTier).then(setSectionProgress);
+      checkForActiveSessions(user.id, dbTier);
     }
-  }, [screen, user?.id]);
+  }, [screen, user?.id, dbTier]);
+
+  // ── Switch certification tier — reset all per-tier state so nothing bleeds ──
+  const handleTierChange = (newTier: Tier) => {
+    if (newTier === tier || TIER_SECTIONS[newTier].length === 0) return;
+    setTier(newTier);
+    setSelectedSection("A");
+    setCompletedSections(new Set());
+    setSectionProgress({});
+    setActiveSessions({});
+    setProgressData(null);
+    setOverallSections(null);
+    setCertStatus(null);
+    setSectionStats(null);
+    setAllWrongReview(null);
+    setCertOnTrack(null);
+  };
 
   // ── Logout ───────────────────────────────────────────────────────────────
   const handleLogout = async () => {
@@ -238,7 +262,7 @@ export default function Index() {
       // 55-question tier total (quizConfig) — otherwise a partial section is recorded
       // at ~25-51% against 55. (Cumulative cert uses best-grade-per-question, so this
       // partial attempt can't lower a later complete run anyway.)
-      const sectionTotal = FALLBACK_QUESTIONS.filter((qq) => qq.section === section).length;
+      const sectionTotal = FALLBACK_QUESTIONS.filter((qq) => qq.tier === tier && qq.section === section).length;
       completeAttempt(session.attemptId, {
         total_questions: sectionTotal,
         passing_threshold: quizConfig.passing_threshold,
@@ -253,7 +277,7 @@ export default function Index() {
     setCurrentAttemptId(null);
     setScreen("quiz");
     if (user) {
-      startAttempt(user.id, "junior")
+      startAttempt(user.id, dbTier)
         .then((id) => setCurrentAttemptId(id))
         .catch(() => setCurrentAttemptId(null));
     }
@@ -282,7 +306,7 @@ export default function Index() {
     setCurrentAttemptId(null);
     setScreen("quiz");
     if (user) {
-      startAttempt(user.id, "junior")
+      startAttempt(user.id, dbTier)
         .then((attemptId) => setCurrentAttemptId(attemptId))
         .catch(() => setCurrentAttemptId(null));
     }
@@ -380,7 +404,7 @@ export default function Index() {
   // ── Next question or finish ───────────────────────────────────────────────
   const handleNext = async () => {
     if (currentQ + 1 >= sessionQuestions.length) {
-      const activeTier = "Junior";
+      const activeTier = tier;
 
       if (currentAttemptId && user) {
         try {
@@ -390,14 +414,14 @@ export default function Index() {
           });
           // Store backend-authoritative section stats for the results display
           setSectionStats({ correct: result.total_correct, scorePercent: result.score_percent });
-          // Mark this section done and compute whether all 3 are now complete
+          // Mark this section done and compute whether ALL of this tier's sections are complete
           setCompletedSections((prev) => new Set([...prev, selectedSection!]));
           const sectionsDone = completedSections.has(selectedSection!)
-            ? completedSections.size >= 3
-            : completedSections.size + 1 >= 3;
+            ? completedSections.size >= sections.length
+            : completedSections.size + 1 >= sections.length;
           // Refresh cumulative progress so results screen shows accurate numbers
           try {
-            const updated = await getUserProgress(user.id, "junior");
+            const updated = await getUserProgress(user.id, dbTier);
             setProgressData(updated);
           } catch {}
           // Authoritative cumulative status: prefer result.cert from /complete; if the
@@ -405,7 +429,7 @@ export default function Index() {
           // dedicated endpoint. Drives the cert badge, verdict, and "Progreso general".
           let certInfo: CertStatus | null = result.cert ?? null;
           if (!certInfo) {
-            try { certInfo = await getCertStatus(user.id, "junior"); } catch { certInfo = null; }
+            try { certInfo = await getCertStatus(user.id, dbTier); } catch { certInfo = null; }
           }
           setCertStatus(certInfo);
           // Build the overall per-section breakdown for the "Progreso general" block +
@@ -415,7 +439,7 @@ export default function Index() {
             if (certInfo?.section_correct && certInfo.section_answered) {
               const sc = certInfo.section_correct;
               const sa = certInfo.section_answered;
-              const breakdown = (["A", "B", "C"] as const)
+              const breakdown = sections
                 .map((sec) => ({
                   section: sec,
                   correct: sc[sec] ?? 0,
@@ -425,17 +449,17 @@ export default function Index() {
                 .filter((s) => s.answered > 0);
               setOverallSections(breakdown);
               const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
-              const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
-              setCertOnTrack((certInfo.correct + remaining) / JUNIOR_TOTAL_QUESTIONS >= quizConfig.passing_threshold);
+              const remaining = quizConfig.total_questions - grandAnswered;
+              setCertOnTrack((certInfo.correct + remaining) / quizConfig.total_questions >= quizConfig.passing_threshold);
             } else {
               // Fallback (older backend): derive from section-progress minus wrong-answers.
               const [secProg, wrongs] = await Promise.all([
-                getSectionProgress(user.id, "junior"),
-                getWrongAnswers(user.id, "junior"),
+                getSectionProgress(user.id, dbTier),
+                getWrongAnswers(user.id, dbTier),
               ]);
-              const wrongBySection: Record<string, number> = { A: 0, B: 0, C: 0 };
-              for (const w of wrongs) if (w.section in wrongBySection) wrongBySection[w.section]++;
-              const breakdown = (["A", "B", "C"] as const)
+              const wrongBySection: Record<string, number> = {};
+              for (const w of wrongs) wrongBySection[w.section] = (wrongBySection[w.section] ?? 0) + 1;
+              const breakdown = sections
                 .map((sec) => {
                   const total = sectionCounts[sec] ?? 0;
                   let answered = Math.min(secProg[sec] ?? 0, total);
@@ -450,13 +474,13 @@ export default function Index() {
               setOverallSections(breakdown);
               const grandCorrect = breakdown.reduce((n, s) => n + s.correct, 0);
               const grandAnswered = breakdown.reduce((n, s) => n + s.answered, 0);
-              const remaining = JUNIOR_TOTAL_QUESTIONS - grandAnswered;
-              setCertOnTrack((grandCorrect + remaining) / JUNIOR_TOTAL_QUESTIONS >= quizConfig.passing_threshold);
+              const remaining = quizConfig.total_questions - grandAnswered;
+              setCertOnTrack((grandCorrect + remaining) / quizConfig.total_questions >= quizConfig.passing_threshold);
             }
           } catch {}
           if (sectionsDone) {
             try {
-              const wrongFromDB = await getWrongAnswers(user.id, "junior");
+              const wrongFromDB = await getWrongAnswers(user.id, dbTier);
               setAllWrongReview(
                 wrongFromDB.map((w) => {
                   const fq = FALLBACK_QUESTIONS.find((q) => q.id === w.questionId);
@@ -532,8 +556,8 @@ export default function Index() {
   const overallCorrect = overallSections
     ? overallSections.reduce((n, s) => n + s.correct, 0)
     : liveCorrect;
-  // True once all 3 sections (A, B, C) have been submitted in this or prior sessions
-  const allSectionsDone = completedSections.size >= 3;
+  // True once every section of the current tier has been submitted (this or prior sessions)
+  const allSectionsDone = completedSections.size >= sections.length;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-card to-background flex items-center justify-center p-4 sm:p-6">
@@ -609,7 +633,7 @@ export default function Index() {
                   </span>
                   <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                     <span className="text-base font-bold text-foreground">{displayName}</span>
-                    {[...earnedTiers].map((tier) => <TierBadge key={tier} tier={tier} />)}
+                    {[...earnedTiers].map((et) => <TierBadge key={et} tier={et} />)}
                   </div>
                   <div className="text-[11px] text-muted-foreground/50">{agentKey}</div>
                 </div>
@@ -622,6 +646,35 @@ export default function Index() {
               </div>
             </div>
 
+            {/* Tier selector — choose which certification to work on */}
+            <div className="mb-4">
+              <span className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground block mb-1.5">
+                {lang === "es" ? "Nivel de certificación" : "Certification level"}
+              </span>
+              <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5">
+                {(["Junior", "Mid-Level", "Senior"] as const).map((tv) => {
+                  const locked = TIER_SECTIONS[tv].length === 0;
+                  const active = tier === tv;
+                  return (
+                    <button
+                      key={tv}
+                      disabled={locked}
+                      onClick={() => handleTierChange(tv)}
+                      className={`flex-1 px-3 py-2 text-xs font-bold rounded-md transition-all ${
+                        active
+                          ? "bg-primary/15 border border-primary/30 text-primary"
+                          : locked
+                            ? "text-muted-foreground/30 border border-transparent cursor-not-allowed"
+                            : "text-muted-foreground border border-transparent hover:text-foreground/70"
+                      }`}
+                    >
+                      {tv}{locked ? " 🔒" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Progress block with interactive section cards */}
             <div className="bg-secondary/30 border border-border/50 rounded-xl p-3.5 mb-6">
               <div className="flex justify-between items-center mb-3">
@@ -629,23 +682,21 @@ export default function Index() {
                   {lang === "es" ? "Tu progreso" : "Your Progress"}
                 </span>
                 <span className="text-[11px] font-bold text-primary tabular-nums">
-                  {completedSections.size}/3 {lang === "es" ? "secciones" : "sections"}
+                  {completedSections.size}/{sections.length} {lang === "es" ? "secciones" : "sections"}
                 </span>
               </div>
 
               <div className="flex flex-col gap-2 mb-3">
-                {(["A", "B", "C"] as const).map((sec) => {
+                {sections.map((sec) => {
                   const done = completedSections.has(sec);
                   const session = activeSessions[sec];
                   const isResume = !done && !!session;
                   const total = sectionCounts[sec] ?? 1;
-                  const answered = Math.min(sectionProgress[sec], total);
+                  const answered = Math.min(sectionProgress[sec] ?? 0, total);
                   const pct = Math.round((answered / total) * 100);
-                  const sectionLabels: Record<string, { title: string; desc: string }> = {
-                    A: { title: lang === "es" ? "Sección A" : "Section A", desc: lang === "es" ? "Operación diaria y producto" : "Daily operations & product" },
-                    B: { title: lang === "es" ? "Sección B" : "Section B", desc: lang === "es" ? "Herramientas del día a día" : "Daily tools (Acordeón)" },
-                    C: { title: lang === "es" ? "Sección C" : "Section C", desc: lang === "es" ? "Plataformas (CORAA, ODS)" : "Platforms (CORAA, ODS)" },
-                  };
+                  const meta = TIER_SECTION_META[tier][sec];
+                  const secTitle = (lang === "es" ? meta?.title_es : meta?.title_en) ?? `Sección ${sec}`;
+                  const secDesc = (lang === "es" ? meta?.desc_es : meta?.desc_en) ?? "";
                   return (
                     <div
                       key={sec}
@@ -663,7 +714,7 @@ export default function Index() {
                       >
                         <div className="flex items-center justify-between mb-1">
                           <div className={`text-xs font-bold ${isResume ? "text-primary" : done ? "text-success" : "text-foreground"}`}>
-                            {done ? "✓ " : ""}{sectionLabels[sec].title}
+                            {done ? "✓ " : ""}{secTitle}
                           </div>
                           <div className={`text-xs font-bold tabular-nums ${isResume ? "text-primary/60" : done ? "text-success/50" : "text-muted-foreground/40"}`}>
                             {total} {lang === "es" ? "pregs." : "qs."}
@@ -674,7 +725,7 @@ export default function Index() {
                             ? (lang === "es" ? `Continuar desde pregunta ${session.answeredCount + 1}` : `Resume from question ${session.answeredCount + 1}`)
                             : done
                               ? (lang === "es" ? "Completada · Haz clic para repetir" : "Completed · Click to retake")
-                              : sectionLabels[sec].desc}
+                              : secDesc}
                         </div>
                         <div className="h-1 bg-secondary/60 rounded-full overflow-hidden">
                           <div
@@ -704,7 +755,7 @@ export default function Index() {
               <div className="text-[10px] text-muted-foreground/50">
                 {progressData
                   ? `${progressData.correct}/${progressData.total}`
-                  : `${localAgentProgress.correct.length}/55`}{" "}
+                  : `${localAgentProgress.correct.length}/${quizConfig.total_questions}`}{" "}
                 {lang === "es" ? "respuestas correctas acumuladas" : "cumulative correct answers"}
               </div>
             </div>
@@ -741,12 +792,13 @@ export default function Index() {
           <QuizResults
             lang={lang}
             agentName={displayName}
+            tier={tier}
             earnedTier={justEarned ?? ([...earnedTiers][earnedTiers.size - 1] ?? null)}
             section={selectedSection}
             results={sessionResults}
             totalQuestions={sessionQuestions.length || sessionResults.length}
             cumulativeCorrect={overallCorrect}
-            cumulativeTotal={JUNIOR_TOTAL_QUESTIONS}
+            cumulativeTotal={quizConfig.total_questions}
             justEarned={!!justEarned}
             allSectionsDone={allSectionsDone}
             certified={certStatus?.certified}
