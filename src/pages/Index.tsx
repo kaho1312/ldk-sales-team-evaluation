@@ -9,11 +9,13 @@ import {
   QuizQuestion,
   FALLBACK_QUESTIONS,
   Section,
+  SectionMeta,
   Tier,
-  TIER_SECTIONS,
   TIER_SECTION_META,
   getByTierAndSection,
   getSectionCounts,
+  getSectionsForTier,
+  parseSheetQuestions,
 } from "@/lib/questions";
 import { saveAnswer, getAgentProgress, getProgressPercent } from "@/lib/progress";
 import type { CertStatus } from "@/lib/scoring";
@@ -31,6 +33,8 @@ import {
   getCompletedSections,
   getSectionProgress,
   getWrongAnswers,
+  getQuizConfigs,
+  getTierQuestionsCsv,
 } from "@/lib/api";
 import { CertificationBadges } from "@/components/CertificationBadges";
 import { toast } from "sonner";
@@ -87,10 +91,10 @@ export default function Index() {
   const [screen, setScreen] = useState<"start" | "section" | "quiz" | "results" | "leaderboard">("start");
 
   // Selected certification tier. `dbTier` is the backend/RDS string; `sections`
-  // is this tier's ordered section list (Junior A/B/C, Mid-Level A–F).
+  // is this tier's ordered section list (Junior A/B/C, Mid-Level A–F, or —
+  // for sheet-driven tiers like Senior — whatever sections the sheet defines).
   const [tier, setTier] = useState<Tier>("Junior");
   const dbTier = tier === "Mid-Level" ? "mid-level" : tier === "Senior" ? "senior" : "junior";
-  const sections = TIER_SECTIONS[tier];
 
   // Certifications — initialized from localStorage cache, refreshed from backend
   const [earnedTiers, setEarnedTiers] = useState<Set<string>>(() => getEarnedTiersLocal(agentKey));
@@ -137,11 +141,19 @@ export default function Index() {
 
   const certifiedOverall = progressData?.certified ?? localAgentProgress.certified;
 
-  // Questions
-  const [allQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
+  // Questions. Hardcoded tiers (Junior, Mid-Level) come from FALLBACK_QUESTIONS;
+  // sheet-driven tiers (e.g. Senior) get merged in by loadExternalBanks below.
+  const [allQuestions, setAllQuestions] = useState<QuizQuestion[]>(FALLBACK_QUESTIONS);
+  // Per-tier (dbTier key) section labels parsed from an external sheet.
+  const [sheetSectionMeta, setSheetSectionMeta] =
+    useState<Record<string, Partial<Record<Section, SectionMeta>>>>({});
   const [activeSessions, setActiveSessions] = useState<Record<string, { attemptId: string; answeredCount: number }>>({});
 
   const t = LANG[lang];
+
+  // This tier's ordered section list — hardcoded for Junior/Mid-Level, derived
+  // from the loaded sheet questions for sheet-driven tiers (Senior).
+  const sections = useMemo(() => getSectionsForTier(allQuestions, tier), [allQuestions, tier]);
 
   const sectionQuestions = useMemo(
     () => getByTierAndSection(allQuestions, tier, selectedSection),
@@ -193,6 +205,46 @@ export default function Index() {
     return () => { cancelled = true; };
   }, [user?.id, dbTier]);
 
+  // ── Load external (sheet-driven) question banks once ────────────────────────
+  // Any active tier with a `questions_source_url` (e.g. Senior) has its questions
+  // fetched via the Lambda proxy, parsed, and merged into `allQuestions`. Done up
+  // front (not on tier-select) so those tiers unlock in the selector and their
+  // sections render. A per-tier fetch/parse failure is swallowed so one bad sheet
+  // can't break the others or the hardcoded tiers.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const configs = await getQuizConfigs();
+        const sheetConfigs = configs.filter((c) => c.is_active && c.questions_source_url);
+        if (sheetConfigs.length === 0) return;
+        const loaded: QuizQuestion[] = [];
+        const metaByTier: Record<string, Partial<Record<Section, SectionMeta>>> = {};
+        const loadedTiers = new Set<string>();
+        for (const cfg of sheetConfigs) {
+          const displayTier = tierKey(cfg.certification_tier) as Tier;
+          try {
+            const { csv } = await getTierQuestionsCsv(cfg.certification_tier);
+            if (!csv) continue;
+            const parsed = parseSheetQuestions(csv, displayTier);
+            if (parsed.questions.length) {
+              loaded.push(...parsed.questions);
+              metaByTier[cfg.certification_tier] = parsed.sectionMeta;
+              loadedTiers.add(displayTier);
+            }
+          } catch { /* skip this tier's sheet */ }
+        }
+        if (cancelled || loaded.length === 0) return;
+        // Rebuild from FALLBACK each run (idempotent): sheet questions replace any
+        // hardcoded ones for the same tier.
+        setAllQuestions([...FALLBACK_QUESTIONS.filter((qq) => !loadedTiers.has(qq.tier)), ...loaded]);
+        setSheetSectionMeta(metaByTier);
+      } catch { /* leave hardcoded tiers as-is */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id]);
+
   // ── Load all in-progress attempts for the current tier (returns the map so
   //    callers can apply it under a cancellation guard) ──────────────────────
   async function loadActiveSessions(userId: string, tierStr: string) {
@@ -224,7 +276,7 @@ export default function Index() {
 
   // ── Switch certification tier — reset all per-tier state so nothing bleeds ──
   const handleTierChange = (newTier: Tier) => {
-    if (newTier === tier || TIER_SECTIONS[newTier].length === 0) return;
+    if (newTier === tier || getSectionsForTier(allQuestions, newTier).length === 0) return;
     setTier(newTier);
     setSelectedSection("A");
     setCompletedSections(new Set());
@@ -266,7 +318,7 @@ export default function Index() {
       // 55-question tier total (quizConfig) — otherwise a partial section is recorded
       // at ~25-51% against 55. (Cumulative cert uses best-grade-per-question, so this
       // partial attempt can't lower a later complete run anyway.)
-      const sectionTotal = FALLBACK_QUESTIONS.filter((qq) => qq.tier === tier && qq.section === section).length;
+      const sectionTotal = allQuestions.filter((qq) => qq.tier === tier && qq.section === section).length;
       completeAttempt(session.attemptId, {
         total_questions: sectionTotal,
         passing_threshold: quizConfig.passing_threshold,
@@ -657,7 +709,7 @@ export default function Index() {
               </span>
               <div className="flex bg-secondary rounded-lg p-0.5 gap-0.5">
                 {(["Junior", "Mid-Level", "Senior"] as const).map((tv) => {
-                  const locked = TIER_SECTIONS[tv].length === 0;
+                  const locked = getSectionsForTier(allQuestions, tv).length === 0;
                   const active = tier === tv;
                   return (
                     <button
@@ -698,7 +750,7 @@ export default function Index() {
                   const total = sectionCounts[sec] ?? 1;
                   const answered = Math.min(sectionProgress[sec] ?? 0, total);
                   const pct = Math.round((answered / total) * 100);
-                  const meta = TIER_SECTION_META[tier][sec];
+                  const meta = sheetSectionMeta[dbTier]?.[sec] ?? TIER_SECTION_META[tier]?.[sec];
                   const secTitle = (lang === "es" ? meta?.title_es : meta?.title_en) ?? `Sección ${sec}`;
                   const secDesc = (lang === "es" ? meta?.desc_es : meta?.desc_en) ?? "";
                   return (

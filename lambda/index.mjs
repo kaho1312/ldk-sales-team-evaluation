@@ -129,6 +129,19 @@ const CORS = {
 const ok = (data, code = 200) => ({ statusCode: code, headers: CORS, body: JSON.stringify(data) });
 const fail = (msg, code = 400) => ({ statusCode: code, headers: CORS, body: JSON.stringify({ message: msg }) });
 
+// Turn any Google-Sheets link (normal /edit share URL, /view, or an already-CSV
+// link) into a CSV export URL we can fetch server-side. Non-Sheets URLs pass
+// through unchanged (e.g. a raw published .csv).
+function toCsvExportUrl(url) {
+  if (!url) return url;
+  if (/[?&]output=csv/i.test(url) || /\/export\?[^#]*format=csv/i.test(url)) return url;
+  const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!m) return url;
+  const gidM = url.match(/[#&?]gid=([0-9]+)/);
+  const gid = gidM ? gidM[1] : '0';
+  return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+}
+
 function calcScore(answers, totalQuestions, passingThreshold = 0.9) {
   const minCorrect = Math.ceil(totalQuestions * passingThreshold);
   const maxErr = Math.floor(totalQuestions * 0.1);
@@ -241,7 +254,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'midlevel-2026-07-14', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true });
+    return ok({ version: 'sheet-questions-2026-07-27', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -532,6 +545,35 @@ export const handler = async (event) => {
     if (method === 'GET' && seg[0] === 'quiz-configs' && seg[1] === 'active') {
       const [rows] = await conn.query('SELECT * FROM quiz_configs WHERE certification_tier=? AND is_active=1', [(q.tier || 'junior').toLowerCase()]);
       return ok(rows[0] || null);
+    }
+
+    // ── GET /quiz-configs/questions?tier= ───────────────────────────────────────
+    // Server-side proxy that fetches a tier's external question sheet as CSV and
+    // returns the raw text. Done server-side so we don't hit browser CORS on the
+    // Google export redirect (which lacks CORS headers). The frontend parses it.
+    if (method === 'GET' && seg[0] === 'quiz-configs' && seg[1] === 'questions') {
+      const tier = (q.tier || 'junior').toLowerCase();
+      const [rows] = await conn.query(
+        'SELECT questions_source_url FROM quiz_configs WHERE certification_tier=? AND is_active=1',
+        [tier]
+      );
+      const srcUrl = rows[0]?.questions_source_url;
+      if (!srcUrl) return ok({ csv: null, sourceUrl: null });
+      const csvUrl = toCsvExportUrl(srcUrl);
+      try {
+        const res = await fetch(csvUrl, { redirect: 'follow' });
+        const text = await res.text();
+        if (!res.ok) {
+          return fail(`No se pudo leer la hoja (HTTP ${res.status}). Verifica que el enlace sea accesible.`, 502);
+        }
+        const ct = res.headers.get('content-type') || '';
+        if (/text\/html/i.test(ct) || /^\s*<(!doctype|html)/i.test(text)) {
+          return fail('La hoja no es pública. En Google Sheets: Compartir → "Cualquiera con el enlace" (Lector).', 502);
+        }
+        return ok({ csv: text, sourceUrl: csvUrl });
+      } catch (e) {
+        return fail(`Error al leer la hoja: ${e.message}`, 502);
+      }
     }
 
     // ── PUT /quiz-configs/:id ──────────────────────────────────────────────────

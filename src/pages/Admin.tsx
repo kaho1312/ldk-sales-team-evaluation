@@ -398,19 +398,28 @@ function ConfigCard({ config, onSaved }: { config: QuizConfig; onSaved: (updated
   const [totalQuestions, setTotalQuestions] = useState(config.total_questions);
   const [questionsSourceUrl, setQuestionsSourceUrl] = useState(config.questions_source_url ?? "");
   const [isActive, setIsActive] = useState(config.is_active);
+  // Editable pass %. Note passing_threshold arrives as a DECIMAL string from MySQL,
+  // so coerce with Number() before scaling.
+  const [passPercent, setPassPercent] = useState(Math.round(Number(config.passing_threshold) * 100));
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
+    // ALWAYS send passing_threshold: the Lambda PUT overwrites all columns, so
+    // omitting it (as before) wiped the threshold to 0 — an accidental "everyone
+    // passes". Clamp to a sane 1–100% range.
+    const threshold = Math.min(100, Math.max(1, passPercent)) / 100;
     try {
       await updateQuizConfig(config.id, {
         total_questions: totalQuestions,
+        passing_threshold: threshold,
         questions_source_url: questionsSourceUrl || null,
         is_active: isActive,
       });
       onSaved({
         ...config,
         total_questions: totalQuestions,
+        passing_threshold: threshold,
         questions_source_url: questionsSourceUrl || null,
         is_active: isActive,
       });
@@ -423,7 +432,6 @@ function ConfigCard({ config, onSaved }: { config: QuizConfig; onSaved: (updated
   };
 
   const tier = config.certification_tier;
-  const passPercent = Math.round(config.passing_threshold * 100);
 
   return (
     <div className="bg-card/50 border border-border/50 rounded-2xl p-6 backdrop-blur-sm space-y-4">
@@ -476,11 +484,16 @@ function ConfigCard({ config, onSaved }: { config: QuizConfig; onSaved: (updated
 
         <div>
           <label className="text-[11px] font-bold tracking-wider uppercase text-muted-foreground block mb-1.5">
-            Umbral de aprobacion
+            Umbral de aprobacion (%)
           </label>
-          <div className="text-sm font-semibold text-foreground bg-secondary/30 border border-border/50 rounded-xl py-2 px-3 inline-block">
-            {passPercent}%
-          </div>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            className="bg-secondary/50 border border-border rounded-xl text-foreground text-sm py-2 px-3 outline-none focus:border-primary/40 transition-colors w-32"
+            value={passPercent}
+            onChange={(e) => setPassPercent(Number(e.target.value))}
+          />
         </div>
 
         <div>

@@ -245,6 +245,17 @@ export async function getActiveConfig(tier: string): Promise<QuizConfig | null> 
   });
 }
 
+// Fetch a tier's external question sheet as raw CSV via the Lambda proxy (server-side
+// fetch avoids the browser CORS block on Google's export redirect). Returns
+// { csv: null } when the tier has no questions_source_url configured.
+export async function getTierQuestionsCsv(
+  tier: string,
+): Promise<{ csv: string | null; sourceUrl: string | null }> {
+  return apiFetch<{ csv: string | null; sourceUrl: string | null }>("/quiz-configs/questions", {
+    query: { tier },
+  });
+}
+
 export async function updateQuizConfig(
   id: string,
   updates: Partial<Pick<QuizConfig, "total_questions" | "passing_threshold" | "questions_source_url" | "is_active">>,

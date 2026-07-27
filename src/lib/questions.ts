@@ -382,10 +382,133 @@ export async function fetchQuestionsFromSheet(sheetUrl: string): Promise<{
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FLEXIBLE SHEET PARSER
+// Loads a tier's questions from a Google-Sheet CSV. Supports two layouts:
+//   (1) TEMPLATE  — a header row with id/tier/section/question/model_answer columns
+//                   (the strict format handled by parseQuestionsFromCSV).
+//   (2) NATURAL   — the LDK evaluation-doc layout: "SECCIÓN N: Título (n)" rows mark
+//                   sections (mapped A,B,C… in order); each question is a numbered
+//                   row followed by a "Respuesta: …" row with its model answer.
+// Returns the parsed questions PLUS the ordered section list and per-section labels
+// derived from the sheet (so tiers with no hardcoded sections, e.g. Senior, render).
+// ─────────────────────────────────────────────────────────────────────────────
+const SECTION_LETTERS: Section[] = ["A", "B", "C", "D", "E", "F"];
+const TIER_CODE: Record<Tier, string> = { Junior: "JR", "Mid-Level": "ML", Senior: "SR" };
+
+export interface ParsedSheet {
+  questions: QuizQuestion[];
+  sections: Section[];
+  sectionMeta: Partial<Record<Section, SectionMeta>>;
+  errors: string[];
+}
+
+function distinctSectionsInOrder(questions: QuizQuestion[]): Section[] {
+  const seen = new Set<string>();
+  const out: Section[] = [];
+  for (const l of SECTION_LETTERS) {
+    if (questions.some((q) => q.section === l) && !seen.has(l)) { seen.add(l); out.push(l); }
+  }
+  return out;
+}
+
+export function parseSheetQuestions(csvText: string, tier: Tier): ParsedSheet {
+  const rows = parseCSV(csvText);
+  if (rows.length < 1) return { questions: [], sections: [], sectionMeta: {}, errors: ["La hoja está vacía."] };
+
+  const headers = rows[0].map(normalizeHeader);
+  const looksTemplate =
+    headers.includes("question") &&
+    (headers.includes("tier") || headers.includes("section")) &&
+    ["modelanswer", "model_answer", "answer", "modelandswer"].some((k) => headers.includes(k));
+
+  if (looksTemplate) {
+    const { questions, errors } = parseQuestionsFromCSV(csvText);
+    // parseQuestionsFromCSV falls back to FALLBACK_QUESTIONS on hard failure; keep
+    // only rows for THIS tier so a fallback can't leak other tiers' questions in.
+    const tierQs = questions.filter((qq) => qq.tier === tier);
+    const sections = distinctSectionsInOrder(tierQs);
+    return { questions: tierQs, sections, sectionMeta: {}, errors: tierQs.length ? errors : [...errors, "No se encontraron preguntas para este nivel en la plantilla."] };
+  }
+
+  return parseNaturalSheet(rows, tier);
+}
+
+function parseNaturalSheet(rows: string[][], tier: Tier): ParsedSheet {
+  const errors: string[] = [];
+  const questions: QuizQuestion[] = [];
+  const sections: Section[] = [];
+  const sectionMeta: Partial<Record<Section, SectionMeta>> = {};
+  const code = TIER_CODE[tier] ?? "Q";
+  const perSection: Record<string, number> = {};
+  const clean = (s: string) => (s ?? "").replace(/\s+/g, " ").trim();
+
+  let cur: Section | null = null;
+  let pendingQ: string | null = null;
+
+  for (const row of rows) {
+    const cells = row.map((c) => (c ?? "").trim());
+    // content = first non-empty cell, skipping a leading pure-number index column.
+    let content = "";
+    for (let i = 0; i < cells.length; i++) {
+      if (i === 0 && /^\d+$/.test(cells[0])) continue;
+      if (cells[i]) { content = cells[i]; break; }
+    }
+    if (!content) continue;
+
+    const secM = content.match(/secci[oó]n\s*\d*\s*[:.\-–]?\s*(.*)/i);
+    if (secM && /secci[oó]n/i.test(content)) {
+      if (sections.length >= SECTION_LETTERS.length) {
+        errors.push(`Se ignoró una sección extra (máximo ${SECTION_LETTERS.length}).`);
+        cur = null; pendingQ = null; continue;
+      }
+      cur = SECTION_LETTERS[sections.length];
+      sections.push(cur);
+      const label = clean(secM[1].replace(/\s*\(\s*\d+\s*\)\s*$/, "")) || `Sección ${cur}`;
+      sectionMeta[cur] = { title_es: `Sección ${cur}`, title_en: `Section ${cur}`, desc_es: label, desc_en: label };
+      pendingQ = null;
+      continue;
+    }
+
+    const ansM = content.match(/^respuesta\s*[:.\-–]?\s*(.*)/i);
+    if (ansM) {
+      const answer = clean(ansM[1]);
+      if (cur && pendingQ && answer) {
+        const n = (perSection[cur] = (perSection[cur] || 0) + 1);
+        questions.push({ id: `${code}-${cur}-${String(n).padStart(2, "0")}`, tier, section: cur, question: clean(pendingQ), modelAnswer: answer });
+      } else if (!cur) {
+        errors.push('Se encontró una "Respuesta:" fuera de cualquier sección — omitida.');
+      }
+      pendingQ = null;
+      continue;
+    }
+
+    // A question line — only meaningful once we're inside a section.
+    if (cur) {
+      if (pendingQ) errors.push(`Pregunta sin "Respuesta:" — omitida: "${pendingQ.slice(0, 40)}…"`);
+      pendingQ = content;
+    }
+  }
+
+  if (questions.length === 0) {
+    errors.push('No se detectaron preguntas. Formato esperado: filas "SECCIÓN N: …" y, debajo de cada pregunta, una fila "Respuesta: …".');
+  }
+  return { questions, sections, sectionMeta, errors };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FILTER HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 export function getByTier(questions: QuizQuestion[], tier: Tier): QuizQuestion[] {
   return questions.filter((q) => q.tier === tier);
+}
+
+// A tier's ordered section list: the hardcoded TIER_SECTIONS when present (Junior,
+// Mid-Level), otherwise derived from whatever questions are loaded (sheet-driven
+// tiers like Senior).
+export function getSectionsForTier(questions: QuizQuestion[], tier: Tier): Section[] {
+  const fixed = TIER_SECTIONS[tier];
+  if (fixed && fixed.length) return fixed;
+  return distinctSectionsInOrder(getByTier(questions, tier));
 }
 
 export function getByTierAndSection(
@@ -399,7 +522,7 @@ export function getByTierAndSection(
 export function getSectionCounts(questions: QuizQuestion[], tier: Tier): Record<string, number> {
   const filtered = getByTier(questions, tier);
   const counts: Record<string, number> = { All: filtered.length };
-  for (const sec of TIER_SECTIONS[tier]) {
+  for (const sec of getSectionsForTier(questions, tier)) {
     counts[sec] = filtered.filter((q) => q.section === sec || q.section === "All").length;
   }
   return counts;
