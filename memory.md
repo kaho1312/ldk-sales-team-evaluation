@@ -1,6 +1,6 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. Also reconciled §1/§3/§6/§10/§11/§14 with the Mid-Level tier that shipped ~2026-07-14 in a prior session — Junior (55) + Mid-Level (60) are BOTH live. THEN built the Google-Sheet question loader: Senior (60 q, 6 sections) now loads from a Sheet via a new Lambda proxy route; also fixed a threshold-clobber bug in the admin config form. Frontend pushed (`9133f8f`); ⏳ Lambda upload to ldk-quiz-api PENDING (user), Senior stays locked until then.)
+# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. Also reconciled §1/§3/§6/§10/§11/§14 with the Mid-Level tier that shipped ~2026-07-14 in a prior session — Junior (55) + Mid-Level (60) are BOTH live. THEN built the Google-Sheet question loader: Senior (60 q, 6 sections) now loads from a Sheet via a new Lambda proxy route; also fixed a threshold-clobber bug in the admin config form. Frontend pushed (`9133f8f`); Lambda uploaded + proxy VERIFIED LIVE (`/version`=`sheet-questions-2026-07-27b`; proxy returns the sheet's 60 Senior questions across 6 sections). Senior working end-to-end.)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -92,7 +92,7 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 **New route (session 6, 2026-07-27, `ldk-quiz-api`):** `GET /quiz-configs/questions?tier=` — server-side
 proxy that fetches a tier's `questions_source_url` Google Sheet as CSV (see §6b). Also: admin
 `PUT /quiz-configs/:id` now receives `passing_threshold` from the UI (was being clobbered to 0). `/version`
-= `sheet-questions-2026-07-27b`. ⏳ **This route requires the pending `lambda.zip` upload to go live.**
+= `sheet-questions-2026-07-27b`. ✅ **Live & verified 2026-07-27** — proxy returns the sheet's 60 Senior questions (6 SECCIÓN headers, 60 Respuesta rows).
 
 ---
 
@@ -228,7 +228,7 @@ from that Google Sheet at runtime (Senior uses this; Junior/Mid-Level stay hardc
 |---|---|---|
 | "Error al conectar con el servidor de evaluación" on submit | Likely resolved — VERIFY | progress.md root-caused it to grader returning JSON without braces; the brace-wrap fix IS present in `lambda/grader-deploy.mjs`. Frontend catch behavior unverified end-to-end |
 | Discarded attempts pollute cumulative counts | OPEN (backend) | `handleDiscardAndStart` calls `completeAttempt` on a partial attempt → marks it `failed`, so its partial answers persist and count in `getUserProgress`/`section-progress` forever (root cause of stray counts on the results screen). Proper fix = delete/abandon discarded attempts (Lambda route + redeploy). Frontend results display now tolerates this but still shows a small partial-section row |
-| Senior tier | ✅ LIVE via Google Sheet (session 6) — ⏳ pending Lambda upload | Senior config `is_active=1`, `total_questions=60`, `passing_threshold=0.9`, `questions_source_url`=Sheet. Questions load at runtime via the new proxy route (§6b). Senior stays locked in the UI until `lambda.zip` is uploaded to ldk-quiz-api. |
+| Senior tier | ✅ LIVE via Google Sheet (session 6) — Lambda uploaded + verified 2026-07-27 | Senior config `is_active=1`, `total_questions=60`, `passing_threshold=0.9`, `questions_source_url`=Sheet. Questions load at runtime via the proxy route (§6b), verified returning all 60. |
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
 | **Certification never grants even with a perfect score** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Cumulative server-side auto-grant. Lambda live (`/version`=`cumulative-cert-2026-06-09`); frontend pushed `b4aede4`. Fernanda certified. |
 | **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
@@ -340,7 +340,7 @@ confidence; a backend cumulative-cert test is needed (P3).
 
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
 
-**Session 6b (2026-07-27) — Google-Sheet question loader + Senior tier LIVE — code pushed, ⏳ Lambda upload pending.**
+**Session 6b (2026-07-27) — Google-Sheet question loader + Senior tier — SHIPPED, DEPLOYED & VERIFIED LIVE.**
 Symptom: admin set Senior's `questions_source_url` + activated it, but "nothing happened" — the quiz
 showed no Senior questions. Root cause: the admin URL field was **decorative** — the quiz only ever read
 hardcoded `FALLBACK_QUESTIONS` (`Index.tsx` had `const [allQuestions] = useState(FALLBACK_QUESTIONS)`, no
@@ -357,9 +357,12 @@ natural+template parser, tier-dynamic sections, mount-effect merge). Files: `lam
   (route mocked with the real CSV since the Lambda wasn't deployed yet) — Senior unlocks, 6 sections render
   with sheet labels, 10 q each, section starts with the real first question (6/6). DB accepts `senior`
   attempts (tier CHECK ok, migration 001). `/version` → `sheet-questions-2026-07-27b`.
-- **Deploy status:** frontend pushed `9133f8f` → Amplify. **⏳ REMAINING: upload `lambda.zip` to
-  ldk-quiz-api** (the `wsi4x…` URL — NOT the grader). Until then the new `/quiz-configs/questions` route
-  404s and Senior stays locked (handled gracefully). Confirm `/version`=`sheet-questions-2026-07-27b` after.
+- **Deploy status:** ✅ DONE. Frontend pushed (`9133f8f`) → Amplify; Lambda uploaded to ldk-quiz-api
+  (`/version`=`sheet-questions-2026-07-27b`). **Live-proxy gotcha found & fixed post-deploy (`ec34607`):**
+  `toCsvExportUrl` appended `&gid=0`, which 400s when the sheet's first tab isn't gid 0 — now it only
+  pins a gid when the source URL names one (else Google exports the first sheet). Verified live: proxy
+  returns the 60 Senior questions. NOTE: mocked-route Playwright can't catch a bad export URL — always
+  hit the live proxy after a Lambda deploy of a fetch-external route.
 - **⚠️ id stability caveat (§6b):** `SR-*` ids derive from sheet row order — reordering rows re-maps ids and
   can desync stored answers mid-cohort.
 
@@ -599,9 +602,9 @@ cumulative counts" (§10) — though the best-grade-wins cumulative model alread
 **Done 2026-06-09 (session 2):** Admin access for Kay (guard honors `ADMIN_EMAILS` + self-heals
 `is_admin=1`); Fernanda deleted to re-register fresh; `GET /admin/users` confirmed only 3 users.
 
-**Senior tier — LIVE via Google Sheet (session 6b), pending Lambda upload.** All three tiers now have
-questions. Remaining Senior follow-ups: (a) upload `lambda.zip` to ldk-quiz-api so the loader route goes
-live; (b) consider surfacing sheet parse errors in the admin UI (currently swallowed); (c) mind the id-
-stability caveat (§6b) before editing the sheet mid-cohort; (d) optionally migrate Junior/Mid-Level to
+**Senior tier — LIVE & VERIFIED via Google Sheet (session 6b).** All three tiers now have questions and
+are live. Remaining Senior follow-ups (nice-to-have, not blocking): (a) surface sheet parse errors in the
+admin UI (currently swallowed — a bad sheet just leaves the tier locked with no message); (b) mind the
+id-stability caveat (§6b) before editing the sheet mid-cohort; (c) optionally migrate Junior/Mid-Level to
 the same sheet-driven model for consistency (currently hardcoded).
 ```
