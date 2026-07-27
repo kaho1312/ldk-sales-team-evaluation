@@ -1,6 +1,6 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-06-10 (session 4 — SHIPPED & DEPLOYED: (1) results-review UI — question+agent-answer cards, aggregate "Puntaje Total", green/red correct/incorrect, admin attempt cards show question text; (2) admin "Eliminar usuario" button — unblocked Ana; (3) email-based password reset via Resend — self-service "¿Olvidaste tu contraseña?" + admin "Enviar restablecimiento"; migration 003 applied, Lambda + frontend live)
+# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. NOTE: the Mid-Level tier shipped in an earlier untracked session (live `/version`=`midlevel-2026-07-14`); §6 below is STALE on that and not yet reconciled.)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -85,7 +85,7 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 | `RESET_FROM` | `ldk-quiz-api` Lambda env (optional) | Reset email sender. Defaults to `LDK Ventas <no-reply@ldk.fyi>` (Resend-verified domain = **ldk.fyi**). |
 | `APP_BASE_URL` | `ldk-quiz-api` Lambda env (optional) | Base URL for reset links. Defaults to `https://quiz.ldk.fyi`. |
 
-**New routes (session 4, `ldk-quiz-api`):** `POST /auth/forgot` (public), `POST /auth/reset` (public), `POST /admin/users/:id/send-reset` (admin), `DELETE /admin/users/:id` (now wired into Admin UI). `/version` = `password-reset-2026-06-10`. New table `password_resets` (migration `003_password_resets.sql`, applied).
+**New routes (session 4, `ldk-quiz-api`):** `POST /auth/forgot` (public), `POST /auth/reset` (public), `POST /admin/users/:id/send-reset` (admin), `DELETE /admin/users/:id` (now wired into Admin UI). `/version` = `midlevel-2026-07-14` (current live value, verified live 2026-07-27; was `password-reset-2026-06-10` at session 4). New table `password_resets` (migration `003_password_resets.sql`, applied).
 
 ---
 
@@ -300,6 +300,31 @@ confidence; a backend cumulative-cert test is needed (P3).
 ---
 
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
+
+**Session 6 (2026-07-27) — expired-session handling — SHIPPED & DEPLOYED (frontend-only).**
+Reported symptom: the admin panel (`/admin`) showed "Error al cargar usuarios" + "No hay usuarios
+registrados" and empty pages — user feared the certified users' data was lost. **No data was lost.**
+Live `/leaderboard` confirmed all 5 users + certs intact (Fernanda 55/55 ★Junior, Kay 52/55
+★Mid-Level, Irlanda 51/55 ★Junior, Test 46/55 ★Junior, Ana 27/55). Root cause: JWT is a 7-day TTL;
+the browser's token had expired, but `AuthContext.fetchMe` returned `null` for BOTH a 401 (token
+rejected) and a network outage, so `loadUser` kept the cached admin user ("keep cached user if server
+unreachable"). The app stayed "logged in" with a dead token, sailed past `RequireAuth`/`RequireAdmin`
+(which only check the cached `user`, never token validity), and every authed call 401'd →
+"Error al cargar usuarios". Verified `/admin/users` itself was healthy: clean 403 for a non-admin
+token, 401 for a bad/missing token — NOT a 500/schema issue.
+- **Fix (`src/context/AuthContext.tsx`):** `fetchMe` now returns a discriminated `MeResult`
+  (`ok` / `unauthorized` / `network-error`). 401 or 404 → `unauthorized` → clears `ldk_jwt` +
+  `ldk_user` and `setUser(null)` so the guards redirect to `/login`; 5xx/network → keep the cached
+  user (still transient-outage tolerant, which was the point of the original code).
+- **Fix (`src/lib/api.ts` `apiFetch`):** on any `401`, clear `ldk_jwt` + `ldk_user` and
+  `window.location.assign('/login')` (guarded so it won't fire on `/login`) so a mid-session expiry
+  recovers gracefully instead of surfacing a generic error. Auth routes use `auth.ts` (NOT
+  `apiFetch`), so this can't loop on the login page.
+- **Verified:** `tsc --noEmit` + `vite build` clean; Playwright (local `:8080`) — planted an expired
+  token + cached admin user, opened `/admin` → redirects to `/login`, clears both localStorage keys,
+  renders the login form, shows neither error string (6/6 checks).
+- **Deploy:** committed `ba1722e`, pushed to `main` → Amplify. Frontend-only; NO Lambda/DB change.
+- **Immediate recovery (no deploy needed):** log out + back in for a fresh 7-day token.
 
 **Session 4 (2026-06-10) — results-review UI changes (UI only; no Lambda/grading/question-bank changes).**
 Verified `tsc --noEmit` clean + `vite build` OK. NOT yet committed/deployed at time of writing.
