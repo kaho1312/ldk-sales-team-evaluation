@@ -1,6 +1,6 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. NOTE: the Mid-Level tier shipped in an earlier untracked session (live `/version`=`midlevel-2026-07-14`); §6 below is STALE on that and not yet reconciled.)
+# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. Also reconciled §1/§3/§6/§10/§11/§14 with the Mid-Level tier that shipped ~2026-07-14 in a prior session — Junior (55) + Mid-Level (60) are BOTH live; only Senior remains unwritten.)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -8,7 +8,7 @@
 
 ## 1. WHAT THIS PROJECT IS
 
-A certification quiz web app for the LDK DMC sales team (a Mexican inbound-tourism company). Sales agents log in with their `@ldk.lat` email and answer **open-ended** questions about products, daily operations, and platforms. Each answer is graded by Claude (Haiku) using lenient, interpretive criteria rather than exact-match. Agents accumulate correct answers across three sections (A, B, C) and earn a **Junior** certification when they pass; **Mid-Level** and **Senior** tiers exist in the schema but have no questions yet. The app is fully AWS-hosted (Amplify + Lambda + RDS MySQL) and uses custom JWT auth — no Cognito, no Supabase.
+A certification quiz web app for the LDK DMC sales team (a Mexican inbound-tourism company). Sales agents log in with their `@ldk.lat` email and answer **open-ended** questions about products, daily operations, and platforms. Each answer is graded by Claude (Haiku) using lenient, interpretive criteria rather than exact-match. Agents earn tier certifications — **Junior** (55 questions, sections A/B/C) and **Mid-Level** (60 questions, sections A–F) are both LIVE; a **Senior** tier exists in the schema but has no questions yet. The app is fully AWS-hosted (Amplify + Lambda + RDS MySQL) and uses custom JWT auth — no Cognito, no Supabase.
 
 ---
 
@@ -44,7 +44,7 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 | `src/pages/NotFound.tsx` | 404 |
 | `src/lib/api.ts` | ALL backend calls to `ldk-quiz-api` (attempts, answers, progress, certs, leaderboard, admin) |
 | `src/lib/auth.ts` | JWT login/register/logout; token + user in localStorage |
-| `src/lib/questions.ts` | 55 hardcoded Junior questions (`FALLBACK_QUESTIONS`) + CSV/Google-Sheet parsers |
+| `src/lib/questions.ts` | Hardcoded question bank in `FALLBACK_QUESTIONS` (55 Junior + 60 Mid-Level) + per-tier `TIER_SECTIONS`/`TIER_SECTION_META` (section source of truth) + CSV/Google-Sheet parsers |
 | `src/lib/scoring.ts` | Frontend pass/fail logic (`calculateScore`, `ScoreResult`) |
 | `src/lib/progress.ts` | localStorage progress cache (fast path before backend loads) |
 | `src/lib/i18n.ts` | ES/EN strings (`LANG`) |
@@ -53,6 +53,8 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 | `lambda/grader-deploy.mjs` | `ldk-quiz-grader` — Anthropic grading call + JSON parsing |
 | `migrations/001_mysql_schema.sql` | RDS MySQL 8 schema (users, quiz_configs, quiz_attempts, answers, certifications) |
 | `migrations/002_add_password.sql` | Adds `password_hash` for custom JWT auth |
+| `migrations/003_password_resets.sql` | `password_resets` table (single-use, hashed reset tokens) — applied |
+| `migrations/004_midlevel_sections.sql` | Relaxes `answers.section` CHECK to A–F + activates the Mid-Level `quiz_config` (60 q, 6 sec) — applied |
 
 ---
 
@@ -126,15 +128,20 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 | Tier | DB config (`quiz_configs`) | Questions written? | Sections |
 |---|---|---|---|
 | Junior | `total_questions=55`, `is_active=1`, `passing_threshold=0.9` | ✅ 55 hardcoded in `FALLBACK_QUESTIONS` | A:28 (JR-A-01…28), B:13 (JR-B-29…41), C:14 (JR-C-42…55) |
-| Mid-Level | `total_questions=0`, `is_active=0` | ❌ not written | structure exists |
-| Senior | `total_questions=0`, `is_active=0` | ❌ not written | structure exists |
+| Mid-Level | `total_questions=60`, `section_count=6`, `is_active=1`, `passing_threshold=0.9` (live, verified 2026-07-27) | ✅ 60 hardcoded in `FALLBACK_QUESTIONS` | A:8, B:14, C:10, D:8, E:10, F:10 (`ML-*` ids) |
+| Senior | `total_questions=0`, `is_active=0` | ❌ not written | `TIER_SECTIONS.Senior = []` (no sections yet) |
 
 **Question shape** (`QuizQuestion` in `src/lib/questions.ts`):
 ```ts
-{ id, tier: "Junior"|"Mid-Level"|"Senior", section: "A"|"B"|"C"|"All",
+{ id, tier: "Junior"|"Mid-Level"|"Senior", section: "A"|"B"|"C"|"D"|"E"|"F"|"All",
   question, modelAnswer, tags?, notes? }
 ```
-- Section labels: A = Operación diaria y producto · B = Herramientas del día a día (Acordeón) · C = Plataformas (CORAA, ODS).
+- Section labels are **per-tier** (same letter, different meaning) — single source of truth is
+  `TIER_SECTIONS` + `TIER_SECTION_META` in `questions.ts`.
+  - Junior: A = Operación diaria y producto · B = Herramientas del día a día (Acordeón) · C = Plataformas (CORAA, ODS).
+  - Mid-Level: A = Value Engine aplicado · B = Producto (Master File) · C = Acordeón y respuestas · D = Canales · E = CORAA y operación · F = Pricing.
+- **Pass rules differ by tier:** Junior = ≥90% AND ≤5 errors per section; Mid-Level = ≥90% overall only
+  (per-section error caps are gated to Junior — `enforceSectionCaps = tier === 'junior'` in `certEligibility`).
 - Questions are currently **hardcoded** and shipped in the frontend bundle. `parseQuestionsFromCSV()` and `fetchQuestionsFromSheet()` exist (CSV upload / published Google-Sheet CSV) but `Index.tsx` only uses `FALLBACK_QUESTIONS` today.
 - `quiz_configs.questions_source_url` column exists for a future externalized question source (not wired into the quiz UI yet).
 
@@ -189,7 +196,7 @@ Auth on every non-auth route: `Authorization: Bearer <jwt>`; Lambda `verifyToken
 |---|---|---|
 | "Error al conectar con el servidor de evaluación" on submit | Likely resolved — VERIFY | progress.md root-caused it to grader returning JSON without braces; the brace-wrap fix IS present in `lambda/grader-deploy.mjs`. Frontend catch behavior unverified end-to-end |
 | Discarded attempts pollute cumulative counts | OPEN (backend) | `handleDiscardAndStart` calls `completeAttempt` on a partial attempt → marks it `failed`, so its partial answers persist and count in `getUserProgress`/`section-progress` forever (root cause of stray counts on the results screen). Proper fix = delete/abandon discarded attempts (Lambda route + redeploy). Frontend results display now tolerates this but still shows a small partial-section row |
-| Mid-Level & Senior questions not written | OPEN | configs are `is_active=0`, `total_questions=0` |
+| Senior questions not written | OPEN | Senior config still `is_active=0`, `total_questions=0`. Junior (55) + Mid-Level (60) are LIVE. |
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
 | **Certification never grants even with a perfect score** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Cumulative server-side auto-grant. Lambda live (`/version`=`cumulative-cert-2026-06-09`); frontend pushed `b4aede4`. Fernanda certified. |
 | **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
@@ -325,6 +332,27 @@ token, 401 for a bad/missing token — NOT a 500/schema issue.
   renders the login form, shows neither error string (6/6 checks).
 - **Deploy:** committed `ba1722e`, pushed to `main` → Amplify. Frontend-only; NO Lambda/DB change.
 - **Immediate recovery (no deploy needed):** log out + back in for a fresh 7-day token.
+
+**Mid-Level tier (2026-07-14, prior session) — SHIPPED & DEPLOYED.** (Documented retroactively in
+session 6; not logged when built.) Made the quiz tier-aware (was Junior-only) + added a Junior/Mid-Level
+selector; Junior behavior unchanged. Commits `0d1caf7` (feat) + `9fa1a5e` (cross-tier fix). Live
+`/version`=`midlevel-2026-07-14`; both configs `is_active=1` (verified live 2026-07-27).
+- **Content:** 60 Mid-Level questions in `FALLBACK_QUESTIONS` — A:8, B:14, C:10, D:8, E:10, F:10 (`ML-*`
+  ids). Sections A–F with tier-specific labels (A=Value Engine, B=Producto/Master File, C=Acordeón,
+  D=Canales, E=CORAA y operación, F=Pricing) in `TIER_SECTION_META`. `Section` type widened to A–F.
+- **Rules:** Mid-Level passes on **≥90% overall only** — per-section error caps are Junior-only
+  (`enforceSectionCaps = tier === 'junior'` in `certEligibility`/`calcScore`). Dynamic section buckets so
+  D/E/F count; `/section-progress` includes D/E/F.
+- **Schema:** migration `004_midlevel_sections.sql` — relaxed `answers.section` CHECK to A–F and set the
+  mid-level `quiz_configs` row to `total_questions=60, section_count=6, is_active=1, threshold=0.9`.
+  `quiz_attempts`/`certifications` tier CHECKs already allowed 'mid-level' (migration 001).
+- **Cross-tier bleed fix (`9fa1a5e`) — DO NOT reintroduce:** switching tiers re-ran the data-loading
+  effects, but a previous tier's in-flight requests could resolve AFTER the switch and overwrite the new
+  tier's state — a Junior attempt/cert bled onto the Mid-Level badge ("phantom" Mid-Level cert after
+  completing one section). Fixed with `cancelled` guards on both loader effects,
+  `checkForActiveSessions`→`loadActiveSessions` (returns the map, applied under the guard), and
+  DB-authoritative `earnedTiers` (badges from `GET /certifications`; stale localStorage tiers reconciled
+  away). Keep tier-scoped effects cancellable.
 
 **Session 4 (2026-06-10) — results-review UI changes (UI only; no Lambda/grading/question-bank changes).**
 Verified `tsc --noEmit` clean + `vite build` OK. NOT yet committed/deployed at time of writing.
@@ -516,5 +544,5 @@ cumulative counts" (§10) — though the best-grade-wins cumulative model alread
 **Done 2026-06-09 (session 2):** Admin access for Kay (guard honors `ADMIN_EMAILS` + self-heals
 `is_admin=1`); Fernanda deleted to re-register fresh; `GET /admin/users` confirmed only 3 users.
 
-Beyond all of the above: write Mid-Level and Senior questions and activate their `quiz_configs`.
+Beyond all of the above: write **Senior** questions and activate its `quiz_config` (Junior + Mid-Level are already live).
 ```
