@@ -110,6 +110,20 @@ async function apiFetch<T>(
     body: options?.body ? JSON.stringify(options.body) : undefined,
   });
 
+  // Session expired/invalid mid-use: clear the stale token and send the user to
+  // login instead of surfacing a generic error on a logged-in-but-broken screen
+  // (this is what made the admin panel show "Error al cargar usuarios"). Auth
+  // routes (login/register/forgot/reset) don't go through apiFetch, so this can't
+  // loop on the login page.
+  if (response.status === 401) {
+    localStorage.removeItem("ldk_jwt");
+    localStorage.removeItem("ldk_user");
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.assign("/login");
+    }
+    throw new Error("Tu sesión expiró. Vuelve a iniciar sesión.");
+  }
+
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
 

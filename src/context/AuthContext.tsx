@@ -36,17 +36,28 @@ function toAuthUser(u: StoredUser): AuthUser {
   };
 }
 
-async function fetchMe(): Promise<StoredUser | null> {
+// Discriminated result so callers can tell "the token is no good" (401 / deleted
+// account) apart from "the server is unreachable" (network error / 5xx). Conflating
+// the two is what let an expired session linger as a logged-in-but-broken app.
+type MeResult =
+  | { status: "ok"; user: StoredUser }
+  | { status: "unauthorized" }
+  | { status: "network-error" };
+
+async function fetchMe(): Promise<MeResult> {
   const token = getStoredToken();
-  if (!token || !API) return null;
+  if (!token || !API) return { status: "unauthorized" };
   try {
     const res = await fetch(`${API.replace(/\/+$/, "")}/me`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return null;
-    return await res.json();
+    // 401 = token expired/invalid; 404 = the account no longer exists. Either way
+    // the cached session is unusable and must be cleared.
+    if (res.status === 401 || res.status === 404) return { status: "unauthorized" };
+    if (!res.ok) return { status: "network-error" }; // 5xx / transient — keep cache
+    return { status: "ok", user: await res.json() };
   } catch {
-    return null;
+    return { status: "network-error" };
   }
 }
 
@@ -60,14 +71,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (cached) setUser(toAuthUser(cached));
 
     // Refresh from server
-    const fresh = await fetchMe();
-    if (fresh) {
-      localStorage.setItem("ldk_user", JSON.stringify(fresh));
-      setUser(toAuthUser(fresh));
-    } else if (!cached) {
+    const result = await fetchMe();
+    if (result.status === "ok") {
+      localStorage.setItem("ldk_user", JSON.stringify(result.user));
+      setUser(toAuthUser(result.user));
+    } else if (result.status === "unauthorized") {
+      // Expired/invalid token (or deleted account): clear the stale session so the
+      // route guards send the user to /login instead of leaving them on a
+      // logged-in-but-broken page where every API call 401s (e.g. the admin panel
+      // showing "Error al cargar usuarios").
+      localStorage.removeItem("ldk_jwt");
+      localStorage.removeItem("ldk_user");
       setUser(null);
     }
-    // If server is unreachable but cache exists, keep cached user
+    // status === "network-error": server unreachable but cache exists → keep the
+    // cached user so a transient outage doesn't log everyone out.
   }
 
   async function refresh() {
