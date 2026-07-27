@@ -8,7 +8,7 @@
 
 ## 1. WHAT THIS PROJECT IS
 
-A certification quiz web app for the LDK DMC sales team (a Mexican inbound-tourism company). Sales agents log in with their `@ldk.lat` email and answer **open-ended** questions about products, daily operations, and platforms. Each answer is graded by Claude (Haiku) using lenient, interpretive criteria rather than exact-match. Agents earn tier certifications — **Junior** (55 questions, sections A/B/C) and **Mid-Level** (60 questions, sections A–F) are both LIVE; a **Senior** tier exists in the schema but has no questions yet. The app is fully AWS-hosted (Amplify + Lambda + RDS MySQL) and uses custom JWT auth — no Cognito, no Supabase.
+A certification quiz web app for the LDK DMC sales team (a Mexican inbound-tourism company). Sales agents log in with their `@ldk.lat` email and answer **open-ended** questions about products, daily operations, and platforms. Each answer is graded by Claude (Haiku) using lenient, interpretive criteria rather than exact-match. Agents earn tier certifications — **Junior** (55 q, A/B/C) and **Mid-Level** (60 q, A–F) are LIVE with hardcoded questions; **Senior** (60 q, 6 sections) is LIVE too but loads its questions from a Google Sheet at runtime (see §6b). The app is fully AWS-hosted (Amplify + Lambda + RDS MySQL) and uses custom JWT auth — no Cognito, no Supabase.
 
 ---
 
@@ -92,7 +92,7 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 **New route (session 6, 2026-07-27, `ldk-quiz-api`):** `GET /quiz-configs/questions?tier=` — server-side
 proxy that fetches a tier's `questions_source_url` Google Sheet as CSV (see §6b). Also: admin
 `PUT /quiz-configs/:id` now receives `passing_threshold` from the UI (was being clobbered to 0). `/version`
-= `sheet-questions-2026-07-27`. ⏳ **This route requires the pending `lambda.zip` upload to go live.**
+= `sheet-questions-2026-07-27b`. ⏳ **This route requires the pending `lambda.zip` upload to go live.**
 
 ---
 
@@ -356,10 +356,10 @@ natural+template parser, tier-dynamic sections, mount-effect merge). Files: `lam
 - **Verified:** `tsc` + 39 vitest (10 new parser tests) + `vite build` clean; Playwright vs the REAL sheet
   (route mocked with the real CSV since the Lambda wasn't deployed yet) — Senior unlocks, 6 sections render
   with sheet labels, 10 q each, section starts with the real first question (6/6). DB accepts `senior`
-  attempts (tier CHECK ok, migration 001). `/version` → `sheet-questions-2026-07-27`.
+  attempts (tier CHECK ok, migration 001). `/version` → `sheet-questions-2026-07-27b`.
 - **Deploy status:** frontend pushed `9133f8f` → Amplify. **⏳ REMAINING: upload `lambda.zip` to
   ldk-quiz-api** (the `wsi4x…` URL — NOT the grader). Until then the new `/quiz-configs/questions` route
-  404s and Senior stays locked (handled gracefully). Confirm `/version`=`sheet-questions-2026-07-27` after.
+  404s and Senior stays locked (handled gracefully). Confirm `/version`=`sheet-questions-2026-07-27b` after.
 - **⚠️ id stability caveat (§6b):** `SR-*` ids derive from sheet row order — reordering rows re-maps ids and
   can desync stored answers mid-cohort.
 

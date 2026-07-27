@@ -137,9 +137,11 @@ function toCsvExportUrl(url) {
   if (/[?&]output=csv/i.test(url) || /\/export\?[^#]*format=csv/i.test(url)) return url;
   const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   if (!m) return url;
+  // Only pin a gid if the source URL names one. Appending gid=0 blindly 400s when
+  // the first tab isn't gid 0; with no gid, Google exports the first sheet.
   const gidM = url.match(/[#&?]gid=([0-9]+)/);
-  const gid = gidM ? gidM[1] : '0';
-  return `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv&gid=${gid}`;
+  const base = `https://docs.google.com/spreadsheets/d/${m[1]}/export?format=csv`;
+  return gidM ? `${base}&gid=${gidM[1]}` : base;
 }
 
 function calcScore(answers, totalQuestions, passingThreshold = 0.9) {
@@ -254,7 +256,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'sheet-questions-2026-07-27', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
+    return ok({ version: 'sheet-questions-2026-07-27b', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
