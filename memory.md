@@ -269,7 +269,7 @@ started rejecting 100% of calls; see §11 for the incident. Everything below ref
 |---|---|---|
 | "Error al conectar con el servidor de evaluación" on submit | Likely resolved — VERIFY | progress.md root-caused it to grader returning JSON without braces; the brace-wrap fix IS present in `lambda/grader-deploy.mjs`. Frontend catch behavior unverified end-to-end |
 | Discarded attempts pollute cumulative counts | OPEN (backend) | `handleDiscardAndStart` calls `completeAttempt` on a partial attempt → marks it `failed`, so its partial answers persist and count in `getUserProgress`/`section-progress` forever (root cause of stray counts on the results screen). Proper fix = delete/abandon discarded attempts (Lambda route + redeploy). Frontend results display now tolerates this but still shows a small partial-section row |
-| Senior tier | ✅ LIVE via Google Sheet (session 6) — Lambda uploaded + verified 2026-07-27 | Senior config `is_active=1`, `total_questions=60`, `passing_threshold=0.9`, `questions_source_url`=Sheet. Questions load at runtime via the proxy route (§6b), verified returning all 60. |
+| Senior tier | ✅ LIVE via Google Sheet, verified 2026-07-28 (session 6, §6b + §11 6f) | Senior config `is_active=1`, `total_questions=61`, `passing_threshold=0.9`, `questions_source_url`=Sheet (grew from 60→61 when the user hand-added a question; parser fixed same day to not require the "Respuesta:" label). Questions load at runtime via the proxy route, verified returning all 61 across 6 sections. |
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
 | **Certification never grants even with a perfect score** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Cumulative server-side auto-grant. Lambda live (`/version`=`cumulative-cert-2026-06-09`); frontend pushed `b4aede4`. Fernanda certified. |
 | **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
@@ -787,9 +787,25 @@ cumulative counts" (§10) — though the best-grade-wins cumulative model alread
 **Done 2026-06-09 (session 2):** Admin access for Kay (guard honors `ADMIN_EMAILS` + self-heals
 `is_admin=1`); Fernanda deleted to re-register fresh; `GET /admin/users` confirmed only 3 users.
 
-**Senior tier — LIVE & VERIFIED via Google Sheet (session 6b).** All three tiers now have questions and
-are live. Remaining Senior follow-ups (nice-to-have, not blocking): (a) surface sheet parse errors in the
-admin UI (currently swallowed — a bad sheet just leaves the tier locked with no message); (b) mind the
-id-stability caveat (§6b) before editing the sheet mid-cohort; (c) optionally migrate Junior/Mid-Level to
+**Senior tier — LIVE & VERIFIED via Google Sheet (session 6b, now 61 questions as of 6f).** All three
+tiers now have questions and are live. Remaining Senior follow-ups (nice-to-have, not blocking):
+(a) surface sheet parse errors in the admin UI (currently swallowed — a bad sheet just leaves the tier
+locked with no message); (b) mind the id-stability caveat (§6b) before REORDERING existing sheet rows
+mid-cohort — appending new questions, as done in 6f, is safe; (c) optionally migrate Junior/Mid-Level to
 the same sheet-driven model for consistency (currently hardcoded).
-```
+
+**Done 2026-07-28 (session 6, full day — all shipped & live, see §11 sessions 6c–6h for detail):**
+- Grader LLM provider swapped Anthropic → DeepSeek (old key was rejecting 100% of calls); grading
+  verified live with correct/incorrect/blank probes.
+- Closed the long-standing P1 above: a grading-service failure (outage, timeout, malformed response) no
+  longer gets saved as a wrong answer — shows a retry banner, persists nothing. Caught a real state-leak
+  bug via 2-lens adversarial review that manual testing alone missed.
+- Senior sheet grew 60→61 questions (user hand-edit); sheet parser fixed to not require the literal
+  "Respuesta:" label on answer rows (it silently dropped 2 questions when that label was omitted).
+- Leaderboard rewritten twice per live user feedback: first to stop showing a Junior-scoped score next
+  to a higher earned tier's badge, then to show cumulative correct/total across the WHOLE curriculum
+  (Junior+Mid-Level+Senior = 176) instead of just the best tier.
+- Leaderboard certification badges color-coded by tier (teal/blue/amber, matching Admin.tsx's existing
+  convention) — previously every certified badge looked identical regardless of tier.
+- (Earlier same day) admin panel expired-session fix, Mid-Level reconciliation, Senior Google-Sheet
+  loader shipped, config threshold-clobber bug fixed, CSV-export gid=0 bug fixed.
