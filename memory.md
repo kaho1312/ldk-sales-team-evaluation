@@ -756,10 +756,6 @@ See §10b Layer 3 (closed) + §11 (sessions 6c/6d) for full detail. Grader retur
 error_detail}` on failure + retries 429/5xx with backoff + `max_tokens` raised to 1024; frontend detects
 `data.error` and does NOT persist a grading-service failure as wrong — shows a retry banner instead.
 
-**P2 — Repair Fernanda's data.** Her 3 completed attempts hold all 55 correct (admin_override=1 on
-many after Kay's review). Once P0 ships, trigger a cumulative recompute (re-complete or re-override)
-to grant Junior; discard her in-progress attempt #4 (Section A, 1 answer) so it doesn't linger.
-
 **P3 — Close test gap + data hygiene.** Add a test for the BACKEND per-section→cumulative cert flow
 (current Scenarios 1–2 only cover the dead localStorage path). Fix "discarded attempts pollute
 cumulative counts" (§10) — though the best-grade-wins cumulative model already tolerates it for cert.
