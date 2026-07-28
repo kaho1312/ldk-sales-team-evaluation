@@ -256,7 +256,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'leaderboard-tierscoped-2026-07-28', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
+    return ok({ version: 'leaderboard-grandtotal-2026-07-28', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -515,12 +515,14 @@ export const handler = async (event) => {
     }
 
     // ── GET /leaderboard ───────────────────────────────────────────────────────
-    // Each row's badge is the user's HIGHEST held certification tier (MAX() works
-    // because 'junior' < 'mid-level' < 'senior' alphabetically matches tier rank).
-    // correct/total must be scoped to THAT SAME tier (its own question count),
-    // not hardcoded to Junior/55 — otherwise a Mid-Level/Senior-certified user
-    // shows their Junior score next to a higher-tier badge (e.g. "55/55 ★ SENIOR"
-    // when Senior actually has 61 questions).
+    // `correct` = SUM of a user's distinct-correct-question count across EVERY
+    // tier they've attempted (not just their best/certified one). `total` = the
+    // full curriculum size — SUM of total_questions across ALL tiers (Junior +
+    // Mid-Level + Senior) — the SAME constant for every row. This shows overall
+    // mastery of the whole question bank, e.g. Fernanda's Junior 55 + Senior 59
+    // = "114/176", not just her best tier's score. The tier BADGE shown is still
+    // the user's highest held certification (MAX() works because
+    // 'junior' < 'mid-level' < 'senior' alphabetically matches tier rank).
     if (method === 'GET' && seg[0] === 'leaderboard') {
       const [users] = await conn.query(
         `SELECT u.id, u.full_name,
@@ -531,36 +533,31 @@ export const handler = async (event) => {
          GROUP BY u.id, u.full_name`
       );
       const [perTierCorrect] = await conn.query(
-        `SELECT qa.user_id, qa.certification_tier as tier, COUNT(DISTINCT a.question_id) as correct
+        `SELECT qa.user_id, COUNT(DISTINCT a.question_id) as correct
            FROM answers a
            JOIN quiz_attempts qa ON qa.id = a.attempt_id
           WHERE qa.status IN ('passed','failed') AND COALESCE(a.final_grade, a.ai_grade) = 1
           GROUP BY qa.user_id, qa.certification_tier`
       );
-      const [configs] = await conn.query('SELECT certification_tier, total_questions FROM quiz_configs');
-      const totalByTier = {};
-      for (const c of configs) totalByTier[c.certification_tier] = c.total_questions;
+      const [configs] = await conn.query('SELECT total_questions FROM quiz_configs');
+      const grandTotal = configs.reduce((sum, c) => sum + c.total_questions, 0) || 55;
       const correctByUser = {};
       for (const r of perTierCorrect) {
-        (correctByUser[r.user_id] ??= {})[r.tier] = r.correct;
+        correctByUser[r.user_id] = (correctByUser[r.user_id] || 0) + r.correct;
       }
 
-      const rows = users.map((u) => {
-        const tier = u.certification_tier || 'junior';
-        const correct = correctByUser[u.id]?.[tier] ?? 0;
-        const total = totalByTier[tier] ?? 55;
-        return { id: u.id, full_name: u.full_name, correct, total, certified: !!u.certified, certification_tier: u.certification_tier };
-      });
+      const rows = users.map((u) => ({
+        id: u.id,
+        full_name: u.full_name,
+        correct: correctByUser[u.id] || 0,
+        total: grandTotal,
+        certified: !!u.certified,
+        certification_tier: u.certification_tier,
+      }));
 
-      // Rank by score %, not raw `correct` — rows now carry different totals
-      // (55/60/61...), so a raw-count sort would misorder across tiers.
-      rows.sort((a, b) => {
-        const pa = a.total > 0 ? a.correct / a.total : 0;
-        const pb = b.total > 0 ? b.correct / b.total : 0;
-        if (pb !== pa) return pb - pa;
-        if (b.correct !== a.correct) return b.correct - a.correct;
-        return a.full_name.localeCompare(b.full_name);
-      });
+      // `total` is now the same constant for every row, so ranking by raw
+      // `correct` DESC is equivalent to ranking by percentage.
+      rows.sort((a, b) => b.correct - a.correct || a.full_name.localeCompare(b.full_name));
 
       return ok(rows);
     }
