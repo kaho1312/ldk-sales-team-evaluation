@@ -1,14 +1,29 @@
+// LDK quiz grader — evaluates open-ended answers with an LLM.
+// Provider: DeepSeek (OpenAI-compatible Chat Completions API).
+//   Endpoint: https://api.deepseek.com/chat/completions
+//   Auth:     Authorization: Bearer <DEEPSEEK_API_KEY>
+//   Model:    deepseek-chat (DeepSeek-V3)
+// Contract is unchanged from the old Anthropic grader so the frontend needs no
+// change: in  { question, answer, modelAnswer, section }
+//          out { passed: bool, feedback: string, correct_answer: string|null }.
+// On failure it also returns { error: true, error_detail } (extra fields the
+// frontend ignores) so the cause is visible without digging through CloudWatch.
+
+const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
+const MODEL = "deepseek-chat";
+const MAX_TOKENS = 1024;
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Content-Type, x-api-key",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 export const handler = async (event) => {
-  if (event.requestContext?.http?.method === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      },
-      body: '',
-    };
+  if (event.requestContext?.http?.method === "OPTIONS") {
+    return { statusCode: 200, headers: CORS, body: "" };
   }
 
   const body = typeof event.body === "string" ? JSON.parse(event.body) : event.body ?? event;
@@ -33,7 +48,7 @@ NO REPROBAR por:
 - Respuestas más cortas que la respuesta modelo pero correctas
 - Orden diferente de presentar la información correcta
 
-Responde ÚNICAMENTE en este formato JSON exacto:
+Responde ÚNICAMENTE con un objeto JSON en este formato exacto:
 {"passed": true/false, "feedback": "Explicación breve en español de máximo 2 oraciones", "correct_answer": "La respuesta correcta si reprobó, o null si aprobó"}`;
 
   const userMessage = `Sección: ${section}
@@ -44,49 +59,76 @@ Respuesta modelo (referencia): ${modelAnswer}
 
 Respuesta del agente: ${answer}
 
-Evalúa la respuesta del agente.`;
+Evalúa la respuesta del agente y responde solo con el JSON.`;
 
-  let result;
-  try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 500,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userMessage }],
-      }),
-    });
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const reply = (result, extra = {}) => ({
+    statusCode: 200,
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+    body: JSON.stringify({ ...result, ...extra }),
+  });
+  const failure = (detail) => {
+    console.log("Grader error:", detail);
+    return reply(
+      { passed: false, feedback: "Error al procesar la evaluación.", correct_answer: null },
+      { error: true, error_detail: detail },
+    );
+  };
 
-    console.log("Anthropic status:", response.status);
-    const data = await response.json();
-    console.log("Anthropic response:", JSON.stringify(data).slice(0, 300));
+  if (!apiKey) return failure("DEEPSEEK_API_KEY no está configurada en el entorno de la Lambda.");
 
-    if (!response.ok) {
-      console.log("Anthropic error:", data.error?.type, data.error?.message);
-      throw new Error(`Anthropic API error: ${data.error?.type}`);
+  // Up to 3 attempts, backing off on rate-limit / transient server errors.
+  const RETRYABLE = new Set([429, 500, 502, 503, 504, 529]);
+  let lastDetail = "sin respuesta";
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(DEEPSEEK_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          max_tokens: MAX_TOKENS,
+          temperature: 0,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage },
+          ],
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      console.log("DeepSeek status:", response.status, "attempt", attempt);
+
+      if (!response.ok) {
+        lastDetail = `HTTP ${response.status}: ${data?.error?.message || data?.error?.type || "error desconocido"}`;
+        console.log("DeepSeek error:", lastDetail);
+        if (RETRYABLE.has(response.status) && attempt < 3) { await sleep(attempt * 800); continue; }
+        return failure(lastDetail);
+      }
+
+      const text = (data?.choices?.[0]?.message?.content || "").trim();
+      if (!text) { lastDetail = "respuesta vacía del modelo"; if (attempt < 3) { await sleep(attempt * 800); continue; } return failure(lastDetail); }
+
+      let jsonStr = text.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim();
+      if (!jsonStr.startsWith("{")) jsonStr = "{" + jsonStr + "}";
+      const result = JSON.parse(jsonStr);
+
+      return reply({
+        passed: !!result.passed,
+        feedback: typeof result.feedback === "string" ? result.feedback : "",
+        correct_answer: result.correct_answer ?? null,
+      });
+    } catch (e) {
+      lastDetail = e.message;
+      console.log("Grader exception attempt", attempt, ":", e.message);
+      if (attempt < 3) { await sleep(attempt * 800); continue; }
     }
-
-    const text = data.content[0].text.trim();
-    let jsonStr = text.replace(/^```json?\s*/i, "").replace(/```\s*$/, "").trim();
-    if (!jsonStr.startsWith("{")) jsonStr = "{" + jsonStr + "}";
-    result = JSON.parse(jsonStr);
-  } catch (e) {
-    console.log("Error:", e.message);
-    result = { passed: false, feedback: "Error al procesar la evaluación.", correct_answer: null };
   }
 
-  return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
-    body: JSON.stringify(result),
-  };
+  return failure(lastDetail);
 };
