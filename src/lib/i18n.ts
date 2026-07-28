@@ -57,6 +57,8 @@ export const LANG = {
       `Section ${section}, Question ${q} of ${total}. Continue?`,
     resumeSession: "Continue",
     discardSession: "Start Over",
+    gradingErrorTitle: "We couldn't grade your answer",
+    gradingErrorMsg: "There was a problem with the grading service. Your answer was NOT saved — nothing counted against your score. Please try submitting again.",
   },
   es: {
     title: "Certificación de Ventas",
@@ -114,6 +116,8 @@ export const LANG = {
       `Sección ${section}, Pregunta ${q} de ${total}. ¿Continuar?`,
     resumeSession: "Continuar",
     discardSession: "Empezar de nuevo",
+    gradingErrorTitle: "No pudimos evaluar tu respuesta",
+    gradingErrorMsg: "Hubo un problema con el servicio de evaluación. Tu respuesta NO se guardó — no cuenta contra tu puntaje. Por favor intenta enviarla de nuevo.",
   },
 };
 

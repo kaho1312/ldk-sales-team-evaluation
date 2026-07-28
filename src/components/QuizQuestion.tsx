@@ -16,6 +16,11 @@ interface QuizQuestionProps {
   isCorrect: boolean | null;
   feedback: string;
   correctAnswer: string;
+  // Set when the grading service itself failed (outage/timeout/malformed response)
+  // rather than the answer being right or wrong. The question stays ungraded —
+  // `graded` is NOT set — so the input box stays open and the agent can retry
+  // without it ever counting against their score.
+  gradingError: string | null;
   onNext: () => void;
   onBreak: () => void;
   isLast: boolean;
@@ -33,6 +38,7 @@ export function QuizQuestionView({
   isCorrect,
   feedback,
   correctAnswer,
+  gradingError,
   onNext,
   onBreak,
   isLast,
@@ -72,6 +78,15 @@ export function QuizQuestionView({
       <h2 className="text-foreground text-[17px] font-semibold leading-relaxed mb-5 tracking-tight">
         {question.question}
       </h2>
+
+      {!graded && gradingError && (
+        <div className="bg-warning/10 border border-warning/20 rounded-xl p-3.5 mb-3">
+          <div className="text-[11px] font-bold tracking-wider uppercase text-warning mb-1.5">
+            {t.gradingErrorTitle}
+          </div>
+          <div className="text-sm text-muted-foreground leading-relaxed">{gradingError}</div>
+        </div>
+      )}
 
       {!graded && (
         <div className="mb-4">

@@ -108,6 +108,13 @@ export default function Index() {
   const [isCorrect, setIsCorrect] = useState<boolean | null>(null);
   const [feedback, setFeedback] = useState("");
   const [correctAnswer, setCorrectAnswer] = useState("");
+  // Set when the grading SERVICE fails (outage, timeout, malformed/error response)
+  // rather than the answer being right or wrong. `graded` is deliberately left
+  // false in this case — the question stays open for a retry, and NOTHING is
+  // persisted (backend, localStorage cache, or sessionResults), so a grader
+  // hiccup can never masquerade as a wrong answer. Cleared at the start of every
+  // submit attempt.
+  const [gradingError, setGradingError] = useState<string | null>(null);
   const [currentQ, setCurrentQ] = useState(0);
   const [sessionResults, setSessionResults] = useState<{ id: string; question: string; isCorrect: boolean; feedback: string; correctAnswer: string; userAnswer: string }[]>([]);
 
@@ -374,18 +381,32 @@ export default function Index() {
     setIsCorrect(null);
     setFeedback("");
     setCorrectAnswer("");
+    setGradingError(null);
   };
 
   // ── Submit answer ─────────────────────────────────────────────────────────
   const handleSubmitAnswer = async (answer: string) => {
     if (!q) return;
     setGrading(true);
+    setGradingError(null);
 
     const payload = {
       question: q.question,
       answer,
       modelAnswer: q.modelAnswer,
       section: q.section,
+    };
+
+    // Grading-SERVICE failure (outage, timeout, malformed response, or the
+    // grader's own {error:true} flag) — as opposed to the answer genuinely being
+    // wrong. `graded` is deliberately left false: nothing is persisted (backend,
+    // localStorage cache, sessionResults) and the input stays open for a retry,
+    // so an infra hiccup can never be recorded as an incorrect answer.
+    const failGrading = (technicalDetail: string) => {
+      console.warn("Grading service failed:", technicalDetail);
+      setIsCorrect(null);
+      setGradingError(t.gradingErrorMsg);
+      setGrading(false);
     };
 
     try {
@@ -400,10 +421,20 @@ export default function Index() {
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      if (!res.ok) { failGrading(`HTTP ${res.status}`); return; }
 
       const data = await res.json();
-      const correct = !!data.passed;
+
+      // The grader returns HTTP 200 even when it couldn't produce a real grade
+      // (outage/timeout/malformed model output) — it flags this with `error:true`
+      // in the body rather than a non-2xx status, so that must be checked
+      // explicitly. Also guard against a malformed/missing `passed` field.
+      if (data?.error || typeof data?.passed !== "boolean") {
+        failGrading(data?.error_detail || "malformed grader response");
+        return;
+      }
+
+      const correct = data.passed;
 
       setIsCorrect(correct);
       const rawFeedback = data.feedback || "";
@@ -434,26 +465,8 @@ export default function Index() {
 
       const storedCorrectAnswer = !correct && data.correct_answer ? data.correct_answer : "";
       setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: correct, feedback: personalizedFeedback, correctAnswer: storedCorrectAnswer, userAnswer: answer }]);
-    } catch {
-      setIsCorrect(false);
-      const errorFeedback = lang === "es"
-        ? "Error al conectar con el servidor de evaluación."
-        : "Error connecting to grading server.";
-      setFeedback(errorFeedback);
-      setCorrectAnswer("");
-      setGraded(true);
-      setGrading(false);
-      if (currentAttemptId) {
-        saveAnswerToAttempt(
-          currentAttemptId,
-          q.id,
-          q.section,
-          answer,
-          false,
-          errorFeedback,
-        ).catch(() => {});
-      }
-      setSessionResults((prev) => [...prev, { id: q.id, question: q.question, isCorrect: false, feedback: errorFeedback, correctAnswer: "", userAnswer: answer }]);
+    } catch (e) {
+      failGrading(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -836,6 +849,7 @@ export default function Index() {
               isCorrect={isCorrect}
               feedback={feedback}
               correctAnswer={correctAnswer}
+              gradingError={gradingError}
               onNext={handleNext}
               onBreak={handleBreak}
               isLast={currentQ + 1 >= sessionQuestions.length}
