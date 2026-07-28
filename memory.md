@@ -12,7 +12,16 @@ banner onto the next question). Both frontend-only for the retry fix; grader is 
 (`ldk-quiz-grader`) redeployed by the user. Commits `532ed92` (DeepSeek swap) + `fc87661` (retry fix).
 Earlier same-day work also reconciled §1/§3/§6/§10/§11/§14 with Mid-Level (live since ~2026-07-14) and
 shipped the Senior Google-Sheet question loader (commit `9133f8f` + gid fix `ec34607`) — see the two
-entries below.)
+entries below. TWO MORE FIXES same day (session 6e): (3) leaderboard showed a Junior-scoped score next
+to a HIGHER-tier badge once real users started earning Mid-Level/Senior on top of Junior (e.g. "55/55 ★
+SENIOR" — Senior has 61 questions, not 55) — `GET /leaderboard` now scopes correct/total to each user's
+actual displayed tier (commit `5b2a9bb`, ⏳ Lambda upload to ldk-quiz-api PENDING as of this writing).
+(4) the user hand-added an 11th question to the live Senior sheet's Section 2 without the "Respuesta:"
+label on its answer row — the sheet parser required that literal label, so it silently dropped BOTH that
+question and the next one; quiz kept showing 10/section instead of 11 even though the admin config's
+total (61) was already correctly updated. Parser now uses the sheet's own numbered-question column as
+the "new question" signal instead of requiring the label (commit `516c768`, frontend-only, live via
+Amplify).)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -104,7 +113,12 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 **New route (session 6, 2026-07-27, `ldk-quiz-api`):** `GET /quiz-configs/questions?tier=` — server-side
 proxy that fetches a tier's `questions_source_url` Google Sheet as CSV (see §6b). Also: admin
 `PUT /quiz-configs/:id` now receives `passing_threshold` from the UI (was being clobbered to 0). `/version`
-= `sheet-questions-2026-07-27b`. ✅ **Live & verified 2026-07-27** — proxy returns the sheet's 60 Senior questions (6 SECCIÓN headers, 60 Respuesta rows).
+= `sheet-questions-2026-07-27b`. ✅ **Live & verified 2026-07-27** — proxy returns the sheet's 60 Senior questions (6 SECCIÓN headers, 60 Respuesta rows). (Since superseded — Senior now has 61 questions; see §11 session 6f.)
+
+**Changed route (session 6e, 2026-07-28, `ldk-quiz-api`):** `GET /leaderboard` rewritten to scope
+correct/total to each user's actual displayed (highest-held) tier instead of hardcoding Junior/55 — see
+§11 session 6e. `/version` = `leaderboard-tierscoped-2026-07-28`. ⏳ **Lambda upload PENDING** as of this
+writing.
 
 ---
 
@@ -375,6 +389,61 @@ confidence; a backend cumulative-cert test is needed (P3).
 ---
 
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
+
+**Session 6f (2026-07-28) — sheet parser required the "Respuesta:" label; a hand-edit silently dropped a question — SHIPPED, DEPLOYED & VERIFIED LIVE.**
+Symptom: user added an 11th question to the LIVE Senior sheet's Section 2 (and correctly updated the
+admin "Total de preguntas" to 61), but the quiz kept loading only 60 — Section B still showed 10
+questions, not 11. File: `src/lib/questions.ts` (`parseNaturalSheet`), test:
+`src/test/sheetParser.test.ts`. Frontend-only.
+- **Root cause:** the new question's answer row was typed as the raw answer text (e.g.
+  `www.kay.tours, www.livingdreamsmexico.com, ...`) WITHOUT the `Respuesta:` prefix every other row in
+  the sheet uses. The old parser's answer detection was PURELY regex-based
+  (`/^respuesta\s*[:.\-–]?\s*(.*)/i`) with no fallback — a row missing that literal label was
+  misclassified as a new, un-answered question, which in turn caused BOTH the new question AND the one
+  before it to be silently dropped (the "new question" row overwrote the still-pending previous question
+  without logging an error, since that overwrite path didn't check for a dangling `pendingQ`).
+- **Fix:** the parser now uses the sheet's OWN reliable structural signal — a bare integer in column 0 —
+  to detect "this row starts a new question" (this is literally the sheet's question-number column,
+  which the team has consistently filled in on every row, including the malformed one). Any other content
+  line, while a question is pending, is now treated as that question's answer; the `Respuesta:` label is
+  stripped if present but no longer REQUIRED. Also fixed two smaller gaps found while rewriting: a
+  dangling pending question at the very end of the sheet was previously dropped with no error logged (now
+  caught); an unrecognized row while INSIDE a section is now surfaced as an error (content BEFORE the
+  first `SECCIÓN` header — e.g. a title row — is still silently ignored, matching prior behavior).
+- **Verified:** `tsc` + 41 vitest (2 new regression tests — an unlabeled answer row parses correctly; a
+  trailing question with no answer is still caught with an error). Playwright against the REAL, live,
+  unmocked Senior sheet (not a fixture): before the fix, 6 sections all showed "10 pregs." (61 silently
+  truncated to 60, config's `total_questions=61` visibly ahead of what actually loaded); after, 5 sections
+  show 10 and Section B shows 11, and entering it reads "Pregunta 1 de 11" (3/3 checks). Commit `516c768`,
+  pushed → Amplify (frontend-only, no Lambda/DB change).
+- **Takeaway for future sheet edits:** the `Respuesta:` label is now optional/best-effort, not required —
+  but keep numbering every question in column 0 (the team already does this consistently); that numbered
+  column is what the parser actually depends on now.
+
+**Session 6e (2026-07-28) — leaderboard showed a Junior-scoped score next to a higher-tier badge — SHIPPED, ⏳ LAMBDA UPLOAD PENDING.**
+Symptom (user screenshot): Fernanda Salas showed "55/55 ★ SENIOR", Kay Honig "52/55 ★ SENIOR", Irlanda
+Campos "51/55 ★ MID-LEVEL" — all three had genuinely EARNED those higher tiers (confirmed: not a bogus
+grant — see below), but the numeric score next to each badge was silently their JUNIOR score, not a score
+against the tier actually shown. Root cause was invisible until Mid-Level (live since 2026-07-14) and
+Senior (shipped this session) gave real users tiers above Junior to hold simultaneously. File:
+`lambda/index.mjs` `GET /leaderboard`. Backend-only.
+- **Root cause:** the query hardcoded `WHERE qa.certification_tier = 'junior'` for the `correct` count
+  and `55 as total`, while the badge itself was `MAX(c.certification_tier)` — the user's HIGHEST held
+  cert (this MAX() logic is correct/kept: `'junior' < 'mid-level' < 'senior'` alphabetically happens to
+  match tier rank). The two halves of each row were computed against DIFFERENT tiers whenever a user held
+  more than one cert. For a Senior-badge row, "55/55" isn't even a valid fraction for that tier (Senior
+  has 61 questions) — it's a coincidental reuse of the Junior score.
+- **Fix:** rewrote the route to fetch each user's best-held tier (unchanged), a per-`(user, tier)` correct
+  count across ALL tiers in one query, and each tier's LIVE `total_questions` from `quiz_configs` — then
+  pairs `correct`/`total` to match whichever tier is displayed. Falls back to `junior`/55 for an
+  uncertified user (unchanged common case — e.g. Ana María Narváez, Carlos Ruiz). Sorting changed from
+  raw `correct DESC` to score-**percentage** DESC (rows now carry different totals, so raw count no
+  longer ranks fairly across tiers); `correct DESC` then `full_name ASC` remain as tiebreaks.
+- **Deploy:** committed `5b2a9bb`, `/version` → `leaderboard-tierscoped-2026-07-28`. **⏳ REMAINING:
+  upload `lambda.zip` to ldk-quiz-api** (the `wsi4x…` URL — not the grader). Verify after upload:
+  `/leaderboard` should show Fernanda/Kay/Irlanda's ACTUAL correct/total against their displayed tier
+  (their higher-tier count may well be 0 if they hold the cert but never took/finished that tier's
+  attempt for real — worth a quick eyeball once live, as a separate data-integrity check, not a code bug).
 
 **Session 6c (2026-07-28) — grader LLM provider swap (Anthropic → DeepSeek) — SHIPPED, DEPLOYED & VERIFIED LIVE.**
 Symptom: the grader started returning `{passed:false,"Error al procesar la evaluación."}` on 100% of
