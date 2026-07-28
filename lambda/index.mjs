@@ -256,7 +256,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'sheet-questions-2026-07-27b', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
+    return ok({ version: 'leaderboard-tierscoped-2026-07-28', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -515,26 +515,54 @@ export const handler = async (event) => {
     }
 
     // ── GET /leaderboard ───────────────────────────────────────────────────────
+    // Each row's badge is the user's HIGHEST held certification tier (MAX() works
+    // because 'junior' < 'mid-level' < 'senior' alphabetically matches tier rank).
+    // correct/total must be scoped to THAT SAME tier (its own question count),
+    // not hardcoded to Junior/55 — otherwise a Mid-Level/Senior-certified user
+    // shows their Junior score next to a higher-tier badge (e.g. "55/55 ★ SENIOR"
+    // when Senior actually has 61 questions).
     if (method === 'GET' && seg[0] === 'leaderboard') {
-      const [rows] = await conn.query(
+      const [users] = await conn.query(
         `SELECT u.id, u.full_name,
-          COALESCE((
-            SELECT COUNT(DISTINCT a.question_id)
-            FROM answers a
-            JOIN quiz_attempts qa ON qa.id = a.attempt_id
-            WHERE qa.user_id = u.id AND qa.certification_tier = 'junior'
-              AND qa.status IN ('passed','failed')
-              AND COALESCE(a.final_grade, a.ai_grade) = 1
-          ), 0) as correct,
-          55 as total,
           MAX(CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END) as certified,
           MAX(c.certification_tier) as certification_tier
          FROM users u
          LEFT JOIN certifications c ON c.user_id=u.id
-         GROUP BY u.id, u.full_name
-         ORDER BY correct DESC, u.full_name ASC`
+         GROUP BY u.id, u.full_name`
       );
-      return ok(rows.map(r => ({ ...r, certified: !!r.certified })));
+      const [perTierCorrect] = await conn.query(
+        `SELECT qa.user_id, qa.certification_tier as tier, COUNT(DISTINCT a.question_id) as correct
+           FROM answers a
+           JOIN quiz_attempts qa ON qa.id = a.attempt_id
+          WHERE qa.status IN ('passed','failed') AND COALESCE(a.final_grade, a.ai_grade) = 1
+          GROUP BY qa.user_id, qa.certification_tier`
+      );
+      const [configs] = await conn.query('SELECT certification_tier, total_questions FROM quiz_configs');
+      const totalByTier = {};
+      for (const c of configs) totalByTier[c.certification_tier] = c.total_questions;
+      const correctByUser = {};
+      for (const r of perTierCorrect) {
+        (correctByUser[r.user_id] ??= {})[r.tier] = r.correct;
+      }
+
+      const rows = users.map((u) => {
+        const tier = u.certification_tier || 'junior';
+        const correct = correctByUser[u.id]?.[tier] ?? 0;
+        const total = totalByTier[tier] ?? 55;
+        return { id: u.id, full_name: u.full_name, correct, total, certified: !!u.certified, certification_tier: u.certification_tier };
+      });
+
+      // Rank by score %, not raw `correct` — rows now carry different totals
+      // (55/60/61...), so a raw-count sort would misorder across tiers.
+      rows.sort((a, b) => {
+        const pa = a.total > 0 ? a.correct / a.total : 0;
+        const pb = b.total > 0 ? b.correct / b.total : 0;
+        if (pb !== pa) return pb - pa;
+        if (b.correct !== a.correct) return b.correct - a.correct;
+        return a.full_name.localeCompare(b.full_name);
+      });
+
+      return ok(rows);
     }
 
     // ── GET /quiz-configs ──────────────────────────────────────────────────────
