@@ -1,6 +1,18 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-07-27 (session 6 — FIXED expired-session handling: a stale/expired JWT no longer strands the app as "logged-in-but-broken" (the admin panel's "Error al cargar usuarios" / "No hay usuarios registrados"). `AuthContext` + `apiFetch` now clear the session and redirect to `/login` on 401. Frontend-only; committed `ba1722e`, pushed to `main` → Amplify. NO data was lost — `/leaderboard` confirmed all 5 users + certs intact. Also reconciled §1/§3/§6/§10/§11/§14 with the Mid-Level tier that shipped ~2026-07-14 in a prior session — Junior (55) + Mid-Level (60) are BOTH live. THEN built the Google-Sheet question loader: Senior (60 q, 6 sections) now loads from a Sheet via a new Lambda proxy route; also fixed a threshold-clobber bug in the admin config form. Frontend pushed (`9133f8f`); Lambda uploaded + proxy VERIFIED LIVE (`/version`=`sheet-questions-2026-07-27b`; proxy returns the sheet's 60 Senior questions across 6 sections). Senior working end-to-end.)
+# Last updated: 2026-07-28 (session 6 cont. — TWO MORE FIXES, both LIVE: (1) the Anthropic-backed
+grader started failing 100% of calls (account/key-level, not our code) — swapped the grader Lambda's
+LLM provider to DeepSeek (OpenAI-compatible API), verified live grading correct answers/incorrect/blank
+all working. (2) P1 from §10b Layer 3, finally fixed: a grading-SERVICE failure (outage/timeout/
+malformed response, or the new grader's own `{error:true}` 200-response flag) no longer gets saved as
+an incorrect answer — the question stays open for a retry and nothing is persisted anywhere. Caught via
+2-lens adversarial review + fixed a real leak bug it found (`resetGrading()` wasn't clearing the new
+`gradingError` state, so abandoning a failed question via break/switch/restart leaked a stale error
+banner onto the next question). Both frontend-only for the retry fix; grader is a separate Lambda
+(`ldk-quiz-grader`) redeployed by the user. Commits `532ed92` (DeepSeek swap) + `fc87661` (retry fix).
+Earlier same-day work also reconciled §1/§3/§6/§10/§11/§14 with Mid-Level (live since ~2026-07-14) and
+shipped the Senior Google-Sheet question loader (commit `9133f8f` + gid fix `ec34607`) — see the two
+entries below.)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -82,7 +94,7 @@ Active files that matter for future changes (excludes `ui/` primitives, `supabas
 | `VITE_GRADER_KEY` | Frontend build (optional) | sent as `x-api-key` if present |
 | `JWT_SECRET` | `ldk-quiz-api` Lambda env | HS256 signing key (defaults to insecure literal if unset — **set in prod**) |
 | `DB_HOST` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `ldk-quiz-api` Lambda env | RDS connection (`DB_NAME` defaults `ldk_quiz`; user `LDKadmin`). RDS is reachable from the dev machine (TCP 3306 open) — one-off `mysql2` scripts can run migrations. |
-| `ANTHROPIC_API_KEY` | `ldk-quiz-grader` Lambda env | Anthropic API auth |
+| `DEEPSEEK_API_KEY` | `ldk-quiz-grader` Lambda env | **LIVE since 2026-07-28 (session 6c).** DeepSeek API auth — replaced `ANTHROPIC_API_KEY` when the grader's LLM provider was switched (Anthropic key started rejecting 100% of calls). See §11. |
 | `RESEND_API_KEY` | `ldk-quiz-api` Lambda env | **Set (session 4).** Resend API key for password-reset emails (raw `fetch` to `api.resend.com`). Required for reset emails to send. |
 | `RESET_FROM` | `ldk-quiz-api` Lambda env (optional) | Reset email sender. Defaults to `LDK Ventas <no-reply@ldk.fyi>` (Resend-verified domain = **ldk.fyi**). |
 | `APP_BASE_URL` | `ldk-quiz-api` Lambda env (optional) | Base URL for reset links. Defaults to `https://quiz.ldk.fyi`. |
@@ -181,15 +193,39 @@ from that Google Sheet at runtime (Senior uses this; Junior/Mid-Level stay hardc
 
 ## 7. GRADING LOGIC
 
-- **File:** `lambda/grader-deploy.mjs` (deployed as `ldk-quiz-grader`).
-- **Model:** `claude-haiku-4-5-20251001`, `anthropic-version: 2023-06-01`, called via raw `fetch` to `https://api.anthropic.com/v1/messages`.
-- **max_tokens:** 500.
-- **Sent to Claude:** a Spanish system prompt instructing lenient/interpretive grading (approve on conceptual correctness even with different wording; fail only on factual errors, fundamental misunderstanding, or blank/irrelevant), plus a user message containing `section`, `question`, `modelAnswer` (reference), and the agent's `answer`.
-- **Returned JSON:** `{"passed": bool, "feedback": "≤2 sentences in Spanish", "correct_answer": "text if failed, else null"}`. No `score` field is returned.
-- **Parsing:** strip ```` ```json ```` fences, and if the text doesn't start with `{`, wrap it in braces, then `JSON.parse`. On any error → fallback `{passed:false, feedback:"Error al procesar la evaluación.", correct_answer:null}` and still returns HTTP 200.
-- **Frontend handling** (`Index.tsx`): personalizes feedback ("el agente" → "tu respuesta"), caches to localStorage, and POSTs to `/attempts/:id/answers` (non-blocking).
+**Provider switched Anthropic → DeepSeek on 2026-07-28 (session 6c)** — the Anthropic API key/account
+started rejecting 100% of calls; see §11 for the incident. Everything below reflects the CURRENT
+(DeepSeek) implementation, verified live.
+
+- **File:** `lambda/grader-deploy.mjs` (deployed as `ldk-quiz-grader`, renamed to `index.mjs` in the zip).
+- **Provider/model:** DeepSeek, OpenAI-compatible Chat Completions API — `POST
+  https://api.deepseek.com/chat/completions`, `Authorization: Bearer <DEEPSEEK_API_KEY>`, model
+  `deepseek-chat`. (NOT Anthropic/Claude — that's a historical fact now, not the live grader.)
+- **max_tokens:** 1024 (raised from the old 500, which risked truncating longer answers).
+- **Retries:** up to 3 attempts with linear backoff (800ms × attempt) on HTTP 429/500/502/503/504/529 or
+  a thrown fetch error.
+- **response_format:** `{type:"json_object"}` — DeepSeek's structured-output mode, for reliable JSON.
+- **Sent to the model:** the SAME Spanish system prompt as before (lenient/interpretive grading — approve
+  on conceptual correctness even with different wording; fail only on factual errors, fundamental
+  misunderstanding, or blank/irrelevant), plus a user message containing `section`, `question`,
+  `modelAnswer` (reference), and the agent's `answer`.
+- **Returned JSON (success):** `{"passed": bool, "feedback": "≤2 sentences in Spanish", "correct_answer":
+  "text if failed, else null"}`. No `score` field.
+- **Returned JSON (grader-service failure, session 6c/6d):** `{"passed": false, "feedback": "Error al
+  procesar la evaluación.", "correct_answer": null, "error": true, "error_detail": "<technical reason>"}`
+  — STILL returns HTTP 200 (so a plain `response.ok` check can't distinguish this from a real grade; the
+  frontend must inspect `data.error`). `error`/`error_detail` are new fields the pre-6d frontend ignored;
+  the 6d frontend checks `data.error` explicitly and does NOT treat this as an incorrect answer — see §11
+  session 6d and §10b Layer 3 (now closed).
+- **Parsing:** strip ```` ```json ```` fences, and if the text doesn't start with `{`, wrap it in braces,
+  then `JSON.parse`.
+- **Frontend handling** (`Index.tsx` `handleSubmitAnswer`): on a REAL grade, personalizes feedback ("el
+  agente" → "tu respuesta"), caches to localStorage, and POSTs to `/attempts/:id/answers` (non-blocking).
+  On a grading-SERVICE failure, persists nothing and shows a retry banner instead (§11 session 6d).
 - **Lambda memory size / timeout:** UNKNOWN — verify in AWS console.
-- **No S3 / no handbook.** The deployed `ldk-quiz-grader` is a simple grader only — it does NOT load any handbook or read from S3. Its only env var is `ANTHROPIC_API_KEY`. (Older progress notes describing S3/handbook integration were plans that were never built.)
+- **No S3 / no handbook.** The deployed `ldk-quiz-grader` is a simple grader only — it does NOT load any
+  handbook or read from S3. Its only env var is `DEEPSEEK_API_KEY` (was `ANTHROPIC_API_KEY` before
+  2026-07-28). (Older progress notes describing S3/handbook integration were plans that were never built.)
 
 ---
 
@@ -232,7 +268,7 @@ from that Google Sheet at runtime (Senior uses this; Junior/Mid-Level stay hardc
 | Admin panel incomplete | OPEN | see NEXT PRIORITIES |
 | **Certification never grants even with a perfect score** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Cumulative server-side auto-grant. Lambda live (`/version`=`cumulative-cert-2026-06-09`); frontend pushed `b4aede4`. Fernanda certified. |
 | **Single section scored against the full 55-question tier** | ✅ FIXED & DEPLOYED (P0, session 3) | See §10b + §11. Override recalc + discard path now use the section's own question count. |
-| **Grader marks correct answers wrong on any infra hiccup** | OPEN (P1) | See §10b. `max_tokens:500` truncation / 429 / timeout → fallback `{passed:false,"Error al procesar la evaluación."}` saved as `final_grade=false`. Source of "errores I couldn't reproduce". |
+| **Grader marks correct answers wrong on any infra hiccup** | ✅ FIXED & DEPLOYED (P1, session 6, 2026-07-28) | See §10b Layer 3 (root cause) + §11 (fix). A grading-service failure now shows a retry banner and persists nothing, instead of being saved as wrong. |
 | "TU PROGRESO" home cards: no correct/wrong; stale green on retake; **56/56** footer | OPEN (NEXT) | See §10c. Cards show only *answered*; retake keeps stale green "28/28"; footer shows >55 because `GET /progress` sums answer rows (non-DISTINCT). Design scoped; one open question (retake scoring model). |
 | Results: "¡Certificada!" badge can show ALONGSIDE the amber "ya no es posible alcanzar el 90%" warning | OPEN (low; pre-existing, surfaced session 4) | `QuizResults` renders `certNotPossible` whenever `certOnTrack===false`, independent of the `certified` flag — so a certified user whose current cumulative is <90% (e.g. test@ldk.lat at 46/55) sees both. NOT caused by the session-4 review-UI work. Quick fix: gate the warning on `!certified`. |
 | Password-reset email delivery | ✅ CONFIRMED WORKING END-TO-END (2026-06-10) | User received the reset email from `no-reply@ldk.fyi` and successfully changed their password via the `/reset?token=` link. Self-service forgot flow fully verified live. (Resend domain ldk.fyi verified.) |
@@ -339,6 +375,62 @@ confidence; a backend cumulative-cert test is needed (P3).
 ---
 
 ## 11. RECENTLY FIXED BUGS (do not reintroduce)
+
+**Session 6c (2026-07-28) — grader LLM provider swap (Anthropic → DeepSeek) — SHIPPED, DEPLOYED & VERIFIED LIVE.**
+Symptom: the grader started returning `{passed:false,"Error al procesar la evaluación."}` on 100% of
+calls, fast (~0.3s) — diagnostic of an account/key-level rejection, not our code (confirmed: not the
+Senior/Sheet work, which is a different Lambda; not a timeout/overload, which would be slow; not
+content-specific, since even a trivial probe failed). Root cause turned out to be the Anthropic API key/
+account. **Fix: switched `ldk-quiz-grader` off Anthropic entirely, onto DeepSeek's OpenAI-compatible Chat
+Completions API** (`lambda/grader-deploy.mjs`, deployed as `index.mjs`). Endpoint
+`https://api.deepseek.com/chat/completions`, `Authorization: Bearer <DEEPSEEK_API_KEY>` (new env var,
+replaces `ANTHROPIC_API_KEY`), model `deepseek-chat`. **Contract unchanged** — still
+`{question,answer,modelAnswer,section}` in, `{passed,feedback,correct_answer}` out — so ZERO frontend/DB
+changes were needed for the swap itself. While rewriting: `max_tokens` 500→1024 (was a truncation risk),
+up to 3 attempts with backoff on 429/5xx, `response_format:{type:"json_object"}` for reliable JSON, and
+on failure the response now ALSO carries `{error:true, error_detail:"..."}` (extra fields the frontend
+ignores unless it's specifically checking, see session 6d below) so the real cause is inspectable without
+CloudWatch. Commit `532ed92`. **Verified live** post-deploy: 4/4 grading probes correct (semantic-match
+pass, wrong-answer fail w/ `correct_answer` filled in, blank-answer fail, real Senior question pass);
+OPTIONS/CORS preflight intact. User uploaded `grader.zip` (built via a temp-dir copy renamed to
+`index.mjs`, per the existing grader deploy convention — no `node_modules`) + set `DEEPSEEK_API_KEY` on
+**`ldk-quiz-grader`** (the `b5sk5…` URL — not `ldk-quiz-api`).
+
+**Session 6d (2026-07-28) — grading-service failures no longer saved as wrong answers — SHIPPED, DEPLOYED & VERIFIED LIVE. Closes §10b Layer 3 / old P1.**
+This is the fix hinted at when DeepSeek's `{error:true}` field was added (6c): previously, ANY grader
+failure — network error, non-2xx, OR (now) a 200 response with `data.error` truthy — was recorded as an
+**incorrect answer**: saved to the backend (`saveAnswerToAttempt`), the localStorage cache (`saveAnswer`),
+and `sessionResults`. A grader outage could silently fail real users out of certification with wrong
+grades they never actually got. Files: `src/pages/Index.tsx`, `src/components/QuizQuestion.tsx`,
+`src/lib/i18n.ts`. Frontend-only; no backend/DB change (the grader's contract addition — extra `error`/
+`error_detail` fields — is additive, ignored by anything not looking for it).
+- **Fix:** `handleSubmitAnswer` now treats a grading-service failure (fetch throw, non-2xx, `data.error`
+  truthy, or a non-boolean `data.passed` — defensive against any malformed response) as a THIRD state,
+  distinct from correct/incorrect. `graded` is deliberately left `false` — so the "Siguiente Pregunta"/
+  Next button (gated on `graded`) never appears and the agent literally cannot advance past an ungraded
+  question — and **nothing is persisted anywhere**. A new `gradingError: string | null` state (cleared at
+  the top of every submit attempt) drives an amber "no pudimos evaluar tu respuesta, intenta de nuevo"
+  banner in `QuizQuestion.tsx`, rendered only when `!graded && gradingError`. The agent's typed answer
+  stays in the (unmounted-only-on-question-change) textarea, so retry = just clicking submit again.
+- **Adversarial review caught a real bug my own first test missed:** two independent lenses (score-
+  integrity + UX/state), each independently verified, found the SAME gap — `resetGrading()` (the function
+  every abandon path calls: `handleBreak`, `handleResumeSection`, `handleSectionStart`,
+  `handleDiscardAndStart`, `handleRestart`) reset `grading`/`graded`/`isCorrect`/`feedback`/
+  `correctAnswer` but **not** the new `gradingError`. So a user who hit a grading failure and then took a
+  break / switched sections / restarted (instead of immediately retrying) would see the stale error banner
+  incorrectly leak onto the NEXT, never-submitted question. **Fixed by adding `gradingError` to
+  `resetGrading()`'s reset list** — the single place all 5 call sites already route through. My own
+  Playwright pass had only exercised "fail then immediately retry," never "fail then abandon" — the
+  review process is what caught this, not manual testing. Lesson: for stateful multi-path UI flows, test
+  the abandon/resume paths, not just the happy retry path.
+- **Verified:** `tsc` + 39 vitest clean. Playwright (mocking the grader route with the real
+  `b5sk5…` hostname glob, and stubbing `/attempts/*/answers` to count calls without touching real data):
+  8/8 checks — an explicit `{error:true}` response AND a real network abort both show the banner and save
+  **zero** answers; a subsequent successful retry saves **exactly one** answer, calls the grader **exactly
+  3** times total (2 failed + 1 success, no missed/duplicate calls), and shows "Siguiente Pregunta". A
+  dedicated regression test for the exact leaked-banner scenario the reviewers found (fail → "Tomar un
+  descanso" → re-enter the section) confirms the fresh, unattempted question shows NO stale banner and an
+  empty textarea. Commit `fc87661`.
 
 **Session 6b (2026-07-27) — Google-Sheet question loader + Senior tier — SHIPPED, DEPLOYED & VERIFIED LIVE.**
 Symptom: admin set Senior's `questions_source_url` + activated it, but "nothing happened" — the quiz
@@ -566,10 +658,10 @@ replace vs wipe) — ASK the user before building.
    control at the top (near "Resumen de puntaje") with Todas / Correctas / Incorrectas, filtering the
    answers list below by effective `final_grade`. Helps navigate long attempts (e.g. 28-answer Sec. A).
 
-**P1 — Stop the grader fabricating wrong answers.** See §10b Layer 3. On grader failure return a
-distinct status (e.g. `{error:true}`) so the frontend does NOT persist it as `final_grade=false`
-(retry / queue for re-grade). Raise `max_tokens` above 500 and add 1–2 retries w/ backoff for
-429/529. File: `lambda/grader-deploy.mjs` (deploy as `index.mjs` → **ldk-quiz-grader** `b5sk5…`).
+**✅ P1 — Stop the grader fabricating wrong answers — DONE & DEPLOYED (session 6c+6d, 2026-07-28).**
+See §10b Layer 3 (closed) + §11 (sessions 6c/6d) for full detail. Grader returns `{error:true,
+error_detail}` on failure + retries 429/5xx with backoff + `max_tokens` raised to 1024; frontend detects
+`data.error` and does NOT persist a grading-service failure as wrong — shows a retry banner instead.
 
 **P2 — Repair Fernanda's data.** Her 3 completed attempts hold all 55 correct (admin_override=1 on
 many after Kay's review). Once P0 ships, trigger a cumulative recompute (re-complete or re-override)
