@@ -7,6 +7,20 @@ interface LeaderboardProps {
   lang: Lang;
 }
 
+// Same tier → color convention used in Admin.tsx and Index.tsx's TierBadge
+// (Junior=teal, Mid-Level=blue, Senior=amber), so a badge means the same thing
+// at a glance everywhere in the app.
+function tierBadgeStyles(tier: string | null): string {
+  switch ((tier ?? "junior").toLowerCase()) {
+    case "mid-level":
+      return "bg-blue-500/10 text-blue-400 border-blue-500/20";
+    case "senior":
+      return "bg-amber-500/10 text-amber-400 border-amber-500/20";
+    default:
+      return "bg-teal-500/10 text-teal-400 border-teal-500/20";
+  }
+}
+
 function getInitials(name: string) {
   return name
     .split(" ")
@@ -101,10 +115,10 @@ export function Leaderboard({ lang }: LeaderboardProps) {
                 </div>
               </div>
               <div
-                className={`text-[10px] font-bold tracking-wider uppercase px-2 py-1 rounded-lg shrink-0 ${
+                className={`text-[10px] font-bold tracking-wider uppercase px-2 py-1 rounded-lg border shrink-0 ${
                   entry.certified
-                    ? "bg-success/10 text-success border border-success/20"
-                    : "bg-secondary text-muted-foreground/50 border border-border"
+                    ? tierBadgeStyles(entry.certification_tier)
+                    : "bg-secondary text-muted-foreground/50 border-border"
                 }`}
               >
                 {entry.certified
