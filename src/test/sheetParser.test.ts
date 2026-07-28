@@ -64,12 +64,47 @@ describe("parseSheetQuestions — robustness", () => {
     const parsed = parseSheetQuestions(csv, "Senior");
     expect(parsed.questions).toHaveLength(1);
     expect(parsed.questions[0].modelAnswer).toBe("la respuesta");
-    expect(parsed.errors.some((e) => /sin "Respuesta:"/.test(e))).toBe(true);
+    expect(parsed.errors.some((e) => /pregunta sin respuesta/i.test(e))).toBe(true);
+  });
+
+  // Regression test for a real incident: a question was added to the live Senior
+  // sheet whose answer row was typed WITHOUT the "Respuesta:" label (just the raw
+  // answer text). The old parser required that literal label to recognize an
+  // answer row, so it silently dropped both the question and the next one. The
+  // parser now uses the sheet's own numbered-question column (a bare integer in
+  // column 0) as the signal for "new question" instead, so any non-question row
+  // that follows is treated as the answer, labeled or not.
+  it("accepts an answer row that's missing the 'Respuesta:' label entirely", () => {
+    const csv = [
+      `,SECCIÓN 2: PRODUCTO Y OPERACIÓN AVANZADA (10)`,
+      `20,Detectas un error en la descripción del producto. ¿Qué haces?`,
+      `,Respuesta: Escalar de inmediato.`,
+      `21,Escribe los url's de las 4 paginas de web.`,
+      `,"www.kay.tours, www.livingdreamsmexico.com, www.livingdreamsmexico.city"`,
+      `,SECCIÓN 3: ESCALACIÓN AVANZADA (10)`,
+    ].join("\n");
+    const parsed = parseSheetQuestions(csv, "Senior");
+    expect(parsed.questions).toHaveLength(2);
+    expect(parsed.errors).toHaveLength(0);
+    expect(parsed.questions[1].question).toContain("4 paginas de web");
+    expect(parsed.questions[1].modelAnswer).toBe(
+      "www.kay.tours, www.livingdreamsmexico.com, www.livingdreamsmexico.city",
+    );
   });
 
   it("reports an error for an empty sheet", () => {
     expect(parseSheetQuestions("", "Senior").errors.length).toBeGreaterThan(0);
     expect(parseSheetQuestions("", "Senior").questions).toHaveLength(0);
+  });
+
+  it("does not lose a trailing question that ends the sheet with no answer logged silently", () => {
+    const csv = [
+      `,SECCIÓN 1: X (1)`,
+      `1,Pregunta al final sin respuesta`,
+    ].join("\n");
+    const parsed = parseSheetQuestions(csv, "Senior");
+    expect(parsed.questions).toHaveLength(0);
+    expect(parsed.errors.some((e) => /pregunta sin respuesta/i.test(e))).toBe(true);
   });
 });
 

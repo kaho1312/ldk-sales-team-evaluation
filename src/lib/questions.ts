@@ -445,52 +445,71 @@ function parseNaturalSheet(rows: string[][], tier: Tier): ParsedSheet {
   let cur: Section | null = null;
   let pendingQ: string | null = null;
 
+  const dropPending = () => {
+    if (pendingQ) errors.push(`Pregunta sin respuesta — omitida: "${pendingQ.slice(0, 40)}…"`);
+    pendingQ = null;
+  };
+
   for (const row of rows) {
     const cells = row.map((c) => (c ?? "").trim());
-    // content = first non-empty cell, skipping a leading pure-number index column.
+    // The sheet's own question-number column: a bare integer in column 0. This is
+    // the RELIABLE structural signal for "this row starts a new question" — used
+    // instead of requiring any particular answer-row wording, because the answer
+    // row's label ("Respuesta: ...") is manually typed and can be forgotten (as
+    // happened when a question was added without it, silently dropping it).
+    const startsWithIndex = /^\d+$/.test(cells[0] ?? "");
     let content = "";
     for (let i = 0; i < cells.length; i++) {
-      if (i === 0 && /^\d+$/.test(cells[0])) continue;
+      if (i === 0 && startsWithIndex) continue;
       if (cells[i]) { content = cells[i]; break; }
     }
     if (!content) continue;
 
     const secM = content.match(/secci[oó]n\s*\d*\s*[:.\-–]?\s*(.*)/i);
     if (secM && /secci[oó]n/i.test(content)) {
+      dropPending();
       if (sections.length >= SECTION_LETTERS.length) {
         errors.push(`Se ignoró una sección extra (máximo ${SECTION_LETTERS.length}).`);
-        cur = null; pendingQ = null; continue;
+        cur = null; continue;
       }
       cur = SECTION_LETTERS[sections.length];
       sections.push(cur);
       const label = clean(secM[1].replace(/\s*\(\s*\d+\s*\)\s*$/, "")) || `Sección ${cur}`;
       sectionMeta[cur] = { title_es: `Sección ${cur}`, title_en: `Section ${cur}`, desc_es: label, desc_en: label };
-      pendingQ = null;
       continue;
     }
 
-    const ansM = content.match(/^respuesta\s*[:.\-–]?\s*(.*)/i);
-    if (ansM) {
-      const answer = clean(ansM[1]);
-      if (cur && pendingQ && answer) {
+    if (startsWithIndex && cur) {
+      dropPending();
+      pendingQ = content;
+      continue;
+    }
+
+    // Not a section header, not a new numbered question: if a question is
+    // waiting, this row is its answer. An optional "Respuesta:" label is
+    // stripped if present, but NOT required.
+    if (cur && pendingQ) {
+      const ansM = content.match(/^respuesta\s*[:.\-–]?\s*(.*)/i);
+      const answer = clean(ansM ? ansM[1] : content);
+      if (answer) {
         const n = (perSection[cur] = (perSection[cur] || 0) + 1);
         questions.push({ id: `${code}-${cur}-${String(n).padStart(2, "0")}`, tier, section: cur, question: clean(pendingQ), modelAnswer: answer });
-      } else if (!cur) {
-        errors.push('Se encontró una "Respuesta:" fuera de cualquier sección — omitida.');
       }
       pendingQ = null;
       continue;
     }
 
-    // A question line — only meaningful once we're inside a section.
+    // Content before the first SECCIÓN header (a title row, blank divider, etc.)
+    // is expected and silently ignored. Once inside a section, though, a row
+    // that's neither a question nor an answer to a pending one is unexpected.
     if (cur) {
-      if (pendingQ) errors.push(`Pregunta sin "Respuesta:" — omitida: "${pendingQ.slice(0, 40)}…"`);
-      pendingQ = content;
+      errors.push(`Fila no reconocida — omitida: "${content.slice(0, 60)}…"`);
     }
   }
+  dropPending();
 
   if (questions.length === 0) {
-    errors.push('No se detectaron preguntas. Formato esperado: filas "SECCIÓN N: …" y, debajo de cada pregunta, una fila "Respuesta: …".');
+    errors.push('No se detectaron preguntas. Formato esperado: filas "SECCIÓN N: …" y, debajo de cada pregunta, una fila con la respuesta.');
   }
   return { questions, sections, sectionMeta, errors };
 }
