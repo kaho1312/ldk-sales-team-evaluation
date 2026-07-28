@@ -1,27 +1,18 @@
 # LDK Sales Team Evaluation — Project Memory
 
-# Last updated: 2026-07-28 (session 6 cont. — TWO MORE FIXES, both LIVE: (1) the Anthropic-backed
-grader started failing 100% of calls (account/key-level, not our code) — swapped the grader Lambda's
-LLM provider to DeepSeek (OpenAI-compatible API), verified live grading correct answers/incorrect/blank
-all working. (2) P1 from §10b Layer 3, finally fixed: a grading-SERVICE failure (outage/timeout/
-malformed response, or the new grader's own `{error:true}` 200-response flag) no longer gets saved as
-an incorrect answer — the question stays open for a retry and nothing is persisted anywhere. Caught via
-2-lens adversarial review + fixed a real leak bug it found (`resetGrading()` wasn't clearing the new
-`gradingError` state, so abandoning a failed question via break/switch/restart leaked a stale error
-banner onto the next question). Both frontend-only for the retry fix; grader is a separate Lambda
-(`ldk-quiz-grader`) redeployed by the user. Commits `532ed92` (DeepSeek swap) + `fc87661` (retry fix).
-Earlier same-day work also reconciled §1/§3/§6/§10/§11/§14 with Mid-Level (live since ~2026-07-14) and
-shipped the Senior Google-Sheet question loader (commit `9133f8f` + gid fix `ec34607`) — see the two
-entries below. TWO MORE FIXES same day (session 6e): (3) leaderboard showed a Junior-scoped score next
-to a HIGHER-tier badge once real users started earning Mid-Level/Senior on top of Junior (e.g. "55/55 ★
-SENIOR" — Senior has 61 questions, not 55) — `GET /leaderboard` now scopes correct/total to each user's
-actual displayed tier (commit `5b2a9bb`, ⏳ Lambda upload to ldk-quiz-api PENDING as of this writing).
-(4) the user hand-added an 11th question to the live Senior sheet's Section 2 without the "Respuesta:"
-label on its answer row — the sheet parser required that literal label, so it silently dropped BOTH that
-question and the next one; quiz kept showing 10/section instead of 11 even though the admin config's
-total (61) was already correctly updated. Parser now uses the sheet's own numbered-question column as
-the "new question" signal instead of requiring the label (commit `516c768`, frontend-only, live via
-Amplify).)
+# Last updated: 2026-07-28 (session 6, long day — ALL SHIPPED & LIVE, full detail in §11 sessions
+6c–6g). Reconciled memory with the Mid-Level tier (live since ~2026-07-14). Shipped the Senior
+Google-Sheet question loader, then fixed a threshold-clobber bug, a CSV-export gid=0 bug, and a
+sheet-parser gap (an answer row missing the "Respuesta:" label silently dropped 2 questions when the
+user hand-edited the sheet to 61 questions). Swapped the grader's LLM provider Anthropic → DeepSeek
+(the old key started rejecting 100% of calls) and closed the long-standing P1: a grading-SERVICE
+failure no longer gets saved as a wrong answer (caught a real leak bug via 2-lens adversarial review).
+Rebuilt `GET /leaderboard` twice per user feedback — first to stop showing a Junior-scoped score next
+to a higher earned tier's badge, then again to show cumulative correct/total across the WHOLE
+curriculum (Junior+Mid-Level+Senior = 176) instead of just the best tier — and color-coded the
+leaderboard's tier badges (teal/blue/amber) to match the rest of the app. Commits: `9133f8f` `ec34607`
+`532ed92` `fc87661` `5b2a9bb` `516c768` `9589868` `f5b5c7f`. Two Lambda uploads done by the user
+(grader DEEPSEEK_API_KEY + code; api leaderboard code, twice) — all confirmed live.)
 
 > Persistent project memory. Built from CLAUDE.md, progress.md, migrations, lambda code, and src. Keep this current at the end of every session (see SESSION END CHECKLIST).
 
@@ -115,10 +106,10 @@ proxy that fetches a tier's `questions_source_url` Google Sheet as CSV (see §6b
 `PUT /quiz-configs/:id` now receives `passing_threshold` from the UI (was being clobbered to 0). `/version`
 = `sheet-questions-2026-07-27b`. ✅ **Live & verified 2026-07-27** — proxy returns the sheet's 60 Senior questions (6 SECCIÓN headers, 60 Respuesta rows). (Since superseded — Senior now has 61 questions; see §11 session 6f.)
 
-**Changed route (session 6e, 2026-07-28, `ldk-quiz-api`):** `GET /leaderboard` rewritten to scope
-correct/total to each user's actual displayed (highest-held) tier instead of hardcoding Junior/55 — see
-§11 session 6e. `/version` = `leaderboard-tierscoped-2026-07-28`. ⏳ **Lambda upload PENDING** as of this
-writing.
+**Changed route (session 6g, 2026-07-28, `ldk-quiz-api`):** `GET /leaderboard` now returns cumulative
+correct/total across the WHOLE curriculum (Junior+Mid-Level+Senior = 176), not scoped to any single
+tier — see §11 session 6g (supersedes an intermediate tier-scoped version from session 6e, same day).
+`/version` = `leaderboard-grandtotal-2026-07-28`. ✅ Live & confirmed via user screenshot.
 
 ---
 
@@ -420,7 +411,40 @@ questions, not 11. File: `src/lib/questions.ts` (`parseNaturalSheet`), test:
   but keep numbering every question in column 0 (the team already does this consistently); that numbered
   column is what the parser actually depends on now.
 
-**Session 6e (2026-07-28) — leaderboard showed a Junior-scoped score next to a higher-tier badge — SHIPPED, ⏳ LAMBDA UPLOAD PENDING.**
+**Session 6h (2026-07-28) — leaderboard certification badges color-coded by tier — SHIPPED & LIVE.**
+User feedback on the (now grand-total) leaderboard: "can we distinguish the certification badges
+better?" Root cause: `src/components/Leaderboard.tsx`'s badge was styled purely on `entry.certified`
+(green "success" style for ANY certified tier, gray otherwise) — Junior/Mid-Level/Senior badges were
+visually IDENTICAL, differing only in text. Frontend-only.
+- **Fix:** added `tierBadgeStyles()`, reusing the SAME tier→color convention already used by
+  `TierBadge` in `Admin.tsx`/`Index.tsx` (Junior=teal, Mid-Level=blue, Senior=amber) so a badge means
+  the same thing everywhere in the app, rather than inventing a new palette. Uncertified stays neutral
+  gray "En Progreso".
+- **Verified:** `tsc` + 41 vitest + build clean. Playwright screenshot + `getComputedStyle` check on the
+  live-rendered badges confirmed 3 genuinely distinct colors, consistently applied per tier (both SENIOR
+  rows matched, both JUNIOR rows matched). Commit `f5b5c7f`, frontend-only, live via Amplify.
+
+**Session 6g (2026-07-28) — leaderboard rewritten AGAIN: cumulative correct/total across the WHOLE curriculum — SHIPPED & LIVE.**
+Follow-up to session 6e below, per direct user feedback after seeing the tier-scoped version live: "I
+was hoping to see the correct / of all questions answered (amount of questions in junior + mid +
+senior)" — i.e. overall mastery of the FULL question bank, not just the score for a user's single
+best/certified tier. File: `lambda/index.mjs` `GET /leaderboard`. Backend-only.
+- **Change:** `correct` = SUM of a user's distinct-correct-question count across EVERY tier they've
+  attempted (not just their highest-held one — e.g. Fernanda's Junior score + her Senior score, added
+  together). `total` = SUM of `total_questions` across ALL `quiz_configs` rows — **176** currently
+  (55+60+61) — the SAME constant for every row, representing the full curriculum. The tier BADGE is
+  unchanged (still the user's highest held certification). Sorting simplified back to raw `correct DESC`
+  (name ASC tiebreak) since `total` no longer varies per row, so percentage-based sorting became
+  unnecessary.
+- **Verified live** (before shipping the badge-color change in 6h): user screenshot showed Fernanda
+  174/176 ★Senior, Kay 165/176 ★Senior, Irlanda 156/176 ★Mid-Level, Test User 106/176 ★Junior, Ana
+  53/176 ★Junior — sane, monotonically-plausible cumulative scores. Confirms the earlier
+  data-integrity worry from session 6e (whether higher-tier certs were backed by real attempted
+  questions) resolved itself: real non-zero contributions from each tier are visible in these sums.
+- **Deploy:** committed `9589868`, `/version` → `leaderboard-grandtotal-2026-07-28`. User uploaded
+  `lambda.zip` to ldk-quiz-api; confirmed live via the screenshot above.
+
+**Session 6e (2026-07-28) — leaderboard showed a Junior-scoped score next to a higher-tier badge — SHIPPED & DEPLOYED, then SUPERSEDED by session 6g above (same day).**
 Symptom (user screenshot): Fernanda Salas showed "55/55 ★ SENIOR", Kay Honig "52/55 ★ SENIOR", Irlanda
 Campos "51/55 ★ MID-LEVEL" — all three had genuinely EARNED those higher tiers (confirmed: not a bogus
 grant — see below), but the numeric score next to each badge was silently their JUNIOR score, not a score
@@ -439,11 +463,11 @@ Senior (shipped this session) gave real users tiers above Junior to hold simulta
   uncertified user (unchanged common case — e.g. Ana María Narváez, Carlos Ruiz). Sorting changed from
   raw `correct DESC` to score-**percentage** DESC (rows now carry different totals, so raw count no
   longer ranks fairly across tiers); `correct DESC` then `full_name ASC` remain as tiebreaks.
-- **Deploy:** committed `5b2a9bb`, `/version` → `leaderboard-tierscoped-2026-07-28`. **⏳ REMAINING:
-  upload `lambda.zip` to ldk-quiz-api** (the `wsi4x…` URL — not the grader). Verify after upload:
-  `/leaderboard` should show Fernanda/Kay/Irlanda's ACTUAL correct/total against their displayed tier
-  (their higher-tier count may well be 0 if they hold the cert but never took/finished that tier's
-  attempt for real — worth a quick eyeball once live, as a separate data-integrity check, not a code bug).
+- **Deploy:** committed `5b2a9bb`, `/version` → `leaderboard-tierscoped-2026-07-28`. Uploaded & confirmed
+  live (user screenshot: Fernanda 59/61 ★Senior, Kay 55/61 ★Senior, Irlanda 56/60 ★Mid-Level — proving
+  their higher-tier certs WERE backed by real attempted questions, not a bogus grant). Superseded same
+  day by session 6g's grand-total rewrite — this tier-scoped behavior is no longer live, kept here for
+  history only.
 
 **Session 6c (2026-07-28) — grader LLM provider swap (Anthropic → DeepSeek) — SHIPPED, DEPLOYED & VERIFIED LIVE.**
 Symptom: the grader started returning `{passed:false,"Error al procesar la evaluación."}` on 100% of
