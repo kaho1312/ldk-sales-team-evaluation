@@ -14,6 +14,7 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const RESET_FROM = process.env.RESET_FROM || 'LDK Ventas <no-reply@ldk.fyi>';
 const RESET_TTL_SELF = 60 * 60;          // self-service "forgot password": 1 hour
 const RESET_TTL_INVITE = 60 * 60 * 72;   // admin-sent invite: 72 hours
+const VERIFY_TTL = 60 * 60 * 72;         // registration email-verification link: 72 hours
 
 // ── DB pool ───────────────────────────────────────────────────────────────────
 
@@ -117,6 +118,52 @@ async function sendResetEmail(toEmail, fullName, link, kind) {
   } catch (e) { console.log('Resend send error:', e.message); return false; }
 }
 
+// ── Email verification tokens + email ───────────────────────────────────────
+
+// Create a single-use verification token for a freshly-registered (or
+// still-unverified) user. Mirrors createResetToken exactly, targeting the
+// email_verifications table instead.
+async function createVerificationToken(conn, userId, ttlSeconds) {
+  const raw = randomBytes(32).toString('hex');
+  await conn.query(
+    'INSERT INTO email_verifications (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND))',
+    [randomUUID(), userId, sha256(raw), ttlSeconds]
+  );
+  return raw;
+}
+
+// Send a verification link via Resend. Returns true on a 2xx, same
+// fail-quietly contract as sendResetEmail (logs and returns false rather than
+// throwing, so a Resend outage doesn't crash registration).
+async function sendVerificationEmail(toEmail, fullName, link) {
+  if (!RESEND_API_KEY) { console.log('RESEND_API_KEY not set — cannot send verification email'); return false; }
+  const name = (fullName || '').split(' ')[0] || '';
+  const subject = 'Verifica tu correo — Certificación de Ventas LDK';
+  const html = `
+    <div style="font-family:Arial,Helvetica,sans-serif;max-width:480px;margin:0 auto;color:#0f172a">
+      <h2 style="color:#001344;margin-bottom:8px">Verifica tu correo</h2>
+      <p>Hola${name ? ' ' + name : ''},</p>
+      <p>Gracias por registrarte en la Certificación de Ventas LDK. Confirma que este es tu correo para activar tu cuenta.</p>
+      <p style="margin:24px 0">
+        <a href="${link}" style="background:#001344;color:#fff;text-decoration:none;padding:12px 22px;border-radius:10px;font-weight:bold;display:inline-block">
+          Verificar mi correo
+        </a>
+      </p>
+      <p style="font-size:13px;color:#475569">Este enlace caduca en 72 horas. Si no creaste esta cuenta, puedes ignorar este correo.</p>
+      <p style="font-size:12px;color:#94a3b8;word-break:break-all">Si el botón no funciona, copia este enlace:<br>${link}</p>
+    </div>`;
+  const text = `Verifica tu correo\n\nHola${name ? ' ' + name : ''},\nGracias por registrarte en la Certificación de Ventas LDK. Confirma que este es tu correo para activar tu cuenta.\n\nAbre este enlace (caduca en 72 horas):\n${link}\n\nSi no creaste esta cuenta, ignora este correo.`;
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: RESET_FROM, to: [toEmail], subject, html, text }),
+    });
+    if (!res.ok) { console.log('Resend verification send failed:', res.status, await res.text().catch(() => '')); return false; }
+    return true;
+  } catch (e) { console.log('Resend verification send error:', e.message); return false; }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const CORS = {
@@ -127,7 +174,7 @@ const CORS = {
 };
 
 const ok = (data, code = 200) => ({ statusCode: code, headers: CORS, body: JSON.stringify(data) });
-const fail = (msg, code = 400) => ({ statusCode: code, headers: CORS, body: JSON.stringify({ message: msg }) });
+const fail = (msg, code = 400, extra = {}) => ({ statusCode: code, headers: CORS, body: JSON.stringify({ message: msg, ...extra }) });
 
 // Turn any Google-Sheets link (normal /edit share URL, /view, or an already-CSV
 // link) into a CSV export URL we can fetch server-side. Non-Sheets URLs pass
@@ -256,7 +303,7 @@ export const handler = async (event) => {
 
   // ── GET /version — deploy marker (no auth) ─────────────────────────────────
   if ((event.path || event.rawPath || '/').replace(/^\//, '').split('/')[0] === 'version') {
-    return ok({ version: 'leaderboard-grandtotal-2026-07-28', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true });
+    return ok({ version: 'email-verification-2026-07-28', adminGuardHonorsEmails: true, cumulativeCert: true, passwordReset: true, midLevel: true, sheetQuestions: true, emailVerification: true });
   }
 
   const rawPath = event.path || event.rawPath || '/';
@@ -273,7 +320,11 @@ export const handler = async (event) => {
   const conn = db();
 
   try {
-    // ── POST /auth/register ────────────────────────────────────────────────────
+    // ── POST /auth/register — creates the account UNVERIFIED, no session issued.
+    // The account can't be used to log in until the emailed link is clicked
+    // (see /auth/verify) — this is what actually closes the "anyone can
+    // register any made-up @ldk.lat address" gap; issuing a session here would
+    // make verification decorative. ──────────────────────────────────────────
     if (method === 'POST' && seg[0] === 'auth' && seg[1] === 'register') {
       const { email, password, full_name } = body;
       if (!email || !password || !full_name) return fail('Email, contraseña y nombre son requeridos');
@@ -281,15 +332,29 @@ export const handler = async (event) => {
       if (password.length < 6) return fail('La contraseña debe tener al menos 6 caracteres');
 
       const norm = email.toLowerCase().trim();
-      const [ex] = await conn.query('SELECT id FROM users WHERE email = ?', [norm]);
-      if (ex.length) return fail('Este correo ya está registrado');
+      const [ex] = await conn.query('SELECT id, email_verified FROM users WHERE email = ?', [norm]);
+      if (ex.length) {
+        // An UNVERIFIED duplicate (lost the first email, mistyped the
+        // password, etc.) gets a fresh verification link instead of a hard
+        // rejection. A VERIFIED duplicate is a real conflict — unchanged.
+        if (!ex[0].email_verified) {
+          const raw = await createVerificationToken(conn, ex[0].id, VERIFY_TTL);
+          const sent = await sendVerificationEmail(norm, full_name.trim(), `${APP_BASE_URL}/verify?token=${raw}`);
+          return ok({ needsVerification: true, emailSent: sent });
+        }
+        return fail('Este correo ya está registrado');
+      }
 
       const id = randomUUID();
       const hash = await hashPwd(password);
       const isAdmin = ADMIN_EMAILS.has(norm) ? 1 : 0;
-      await conn.query('INSERT INTO users (id, email, full_name, password_hash, is_admin) VALUES (?, ?, ?, ?, ?)', [id, norm, full_name.trim(), hash, isAdmin]);
-      const jwt = signToken({ sub: id, email: norm });
-      return ok({ token: jwt, user: { id, email: norm, full_name: full_name.trim(), is_admin: !!isAdmin } }, 201);
+      await conn.query(
+        'INSERT INTO users (id, email, full_name, password_hash, is_admin, email_verified) VALUES (?, ?, ?, ?, ?, 0)',
+        [id, norm, full_name.trim(), hash, isAdmin]
+      );
+      const raw = await createVerificationToken(conn, id, VERIFY_TTL);
+      const sent = await sendVerificationEmail(norm, full_name.trim(), `${APP_BASE_URL}/verify?token=${raw}`);
+      return ok({ needsVerification: true, emailSent: sent }, 201);
     }
 
     // ── POST /auth/login ───────────────────────────────────────────────────────
@@ -300,6 +365,11 @@ export const handler = async (event) => {
       const [rows] = await conn.query('SELECT * FROM users WHERE email = ?', [norm]);
       if (!rows.length || !rows[0].password_hash) return fail('Correo o contraseña incorrectos', 401);
       if (!await checkPwd(password, rows[0].password_hash)) return fail('Correo o contraseña incorrectos', 401);
+      // Checked AFTER the password so an unauthenticated caller can't probe
+      // whether an account is verified without also knowing its password.
+      if (!rows[0].email_verified) {
+        return fail('Verifica tu correo antes de iniciar sesión. Revisa tu bandeja de entrada.', 403, { needsVerification: true });
+      }
       await conn.query('UPDATE users SET last_login = NOW() WHERE id = ?', [rows[0].id]);
       const jwt = signToken({ sub: rows[0].id, email: rows[0].email });
       return ok({ token: jwt, user: { id: rows[0].id, email: rows[0].email, full_name: rows[0].full_name, is_admin: !!rows[0].is_admin } });
@@ -337,6 +407,44 @@ export const handler = async (event) => {
       await conn.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, rows[0].user_id]);
       // Consume this token and invalidate any other outstanding tokens for the user.
       await conn.query('UPDATE password_resets SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].user_id]);
+      return ok({ ok: true });
+    }
+
+    // ── POST /auth/verify — consume a registration token, mark the account
+    // verified, and log the user in (same response shape as /auth/login) ────────
+    if (method === 'POST' && seg[0] === 'auth' && seg[1] === 'verify') {
+      const { token: verifyTokenRaw } = body;
+      if (!verifyTokenRaw) return fail('Token requerido');
+      const [rows] = await conn.query(
+        `SELECT id, user_id FROM email_verifications
+          WHERE token_hash = ? AND used_at IS NULL AND expires_at > UTC_TIMESTAMP()
+          ORDER BY created_at DESC LIMIT 1`,
+        [sha256(verifyTokenRaw)]
+      );
+      if (!rows.length) return fail('El enlace de verificación es inválido o ha expirado', 400);
+      await conn.query('UPDATE users SET email_verified = 1 WHERE id = ?', [rows[0].user_id]);
+      await conn.query('UPDATE email_verifications SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].user_id]);
+      const [urows] = await conn.query('SELECT id, email, full_name, is_admin FROM users WHERE id = ?', [rows[0].user_id]);
+      if (!urows.length) return fail('Cuenta no encontrada', 404);
+      const u = urows[0];
+      await conn.query('UPDATE users SET last_login = NOW() WHERE id = ?', [u.id]);
+      const jwt = signToken({ sub: u.id, email: u.email });
+      return ok({ token: jwt, user: { id: u.id, email: u.email, full_name: u.full_name, is_admin: !!u.is_admin } });
+    }
+
+    // ── POST /auth/resend-verification — self-service resend of the
+    // registration verification link. Always 200 (never reveals whether an
+    // email is registered or already verified) — mirrors /auth/forgot. ────────
+    if (method === 'POST' && seg[0] === 'auth' && seg[1] === 'resend-verification') {
+      const { email } = body;
+      if (email && typeof email === 'string') {
+        const norm = email.toLowerCase().trim();
+        const [rows] = await conn.query('SELECT id, email, full_name, email_verified FROM users WHERE email = ?', [norm]);
+        if (rows.length && !rows[0].email_verified) {
+          const raw = await createVerificationToken(conn, rows[0].id, VERIFY_TTL);
+          await sendVerificationEmail(rows[0].email, rows[0].full_name, `${APP_BASE_URL}/verify?token=${raw}`);
+        }
+      }
       return ok({ ok: true });
     }
 

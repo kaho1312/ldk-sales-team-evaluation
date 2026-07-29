@@ -1,29 +1,31 @@
 import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { register } from "@/lib/auth";
-import { useAuth } from "@/context/AuthContext";
 import ldkLogo from "@/assets/logo-ldk.jpeg";
 
 export default function Register() {
-  const navigate = useNavigate();
-  const { refresh } = useAuth();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Set on a successful register — the account is created UNVERIFIED and
+  // can't log in yet, so we show a "check your email" screen instead of
+  // navigating into the app. `emailSent === false` means the account exists
+  // but the verification email itself failed to send (Resend outage) — shown
+  // distinctly so the agent doesn't wait forever for an email that never went out.
+  const [pendingVerification, setPendingVerification] = useState<{ emailSent: boolean } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     const result = await register(firstName, lastName, email, password);
+    setLoading(false);
     if (result.success) {
-      await refresh();
-      navigate("/");
+      setPendingVerification({ emailSent: result.emailSent !== false });
     } else {
-      setLoading(false);
       setError(result.error || "Error al crear la cuenta");
     }
   };
@@ -48,6 +50,27 @@ export default function Register() {
           <p className="text-sm text-muted-foreground mt-1">Solo correos @ldk.lat</p>
         </div>
 
+        {pendingVerification ? (
+          <div className="space-y-4">
+            {pendingVerification.emailSent ? (
+              <div className="bg-success/10 border border-success/20 rounded-xl px-4 py-3 text-sm text-success leading-relaxed">
+                ¡Cuenta creada! Te enviamos un correo para verificar tu dirección. Revisa tu bandeja de
+                entrada (y la carpeta de spam) y haz clic en el enlace para activar tu cuenta.
+              </div>
+            ) : (
+              <div className="bg-warning/10 border border-warning/20 rounded-xl px-4 py-3 text-sm text-warning leading-relaxed">
+                Tu cuenta fue creada, pero no pudimos enviar el correo de verificación en este momento.
+                Contacta a un administrador o intenta de nuevo desde la pantalla de inicio de sesión.
+              </div>
+            )}
+            <Link
+              to="/login"
+              className="block text-center w-full bg-gradient-to-r from-primary to-primary/80 rounded-xl text-primary-foreground text-sm font-bold py-3 tracking-wide hover:brightness-110 transition-all"
+            >
+              Ir a iniciar sesión
+            </Link>
+          </div>
+        ) : (
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex gap-3">
             <div className="flex-1">
@@ -124,13 +147,16 @@ export default function Register() {
             {loading ? "Creando cuenta..." : "Crear cuenta →"}
           </button>
         </form>
+        )}
 
-        <p className="text-center text-xs text-muted-foreground mt-6">
-          ¿Ya tienes cuenta?{" "}
-          <Link to="/login" className="text-primary font-semibold hover:underline">
-            Iniciar sesión
-          </Link>
-        </p>
+        {!pendingVerification && (
+          <p className="text-center text-xs text-muted-foreground mt-6">
+            ¿Ya tienes cuenta?{" "}
+            <Link to="/login" className="text-primary font-semibold hover:underline">
+              Iniciar sesión
+            </Link>
+          </p>
+        )}
       </div>
     </div>
   );

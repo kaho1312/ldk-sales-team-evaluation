@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   saveAnswer,
   getAgentProgress,
@@ -13,6 +13,67 @@ import { isEmailValid, register, login, getCurrentSession, logout } from "@/lib/
 // Clear localStorage before each test for isolation
 beforeEach(() => {
   localStorage.clear();
+});
+
+// ---------------------------------------------------------------------------
+// Mock the network layer for register()/login() so this suite NEVER touches
+// the live production Lambda/RDS. Previously these tests called the REAL
+// backend with zero mocking — every `vitest run` created/resurrected real
+// accounts (e.g. carlos@ldk.lat) in production. That's almost certainly the
+// origin of the unauthorized "ghost" account noted in memory.md: it was
+// deleted once, then silently recreated by the next routine test run.
+//
+// The mock simulates just enough of the real auth contract to exercise the
+// FRONTEND logic in src/lib/auth.ts: register() creates an account that is
+// UNVERIFIED and cannot log in until `markVerified()` simulates the agent
+// clicking the emailed link (the actual token/email mechanics live in the
+// Lambda and aren't this suite's concern).
+// ---------------------------------------------------------------------------
+interface MockUser { password: string; full_name: string; verified: boolean; id: string }
+let mockUsers: Map<string, MockUser>;
+
+function markVerified(email: string) {
+  const u = mockUsers.get(email.toLowerCase().trim());
+  if (u) u.verified = true;
+}
+
+function mockAuthFetch(url: string, init?: RequestInit): Promise<Response> {
+  const path = new URL(url, "http://mock-api").pathname;
+  const body = init?.body ? JSON.parse(init.body as string) : {};
+  const json = (data: unknown, status = 200) =>
+    Promise.resolve(new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } }));
+
+  if (path.endsWith("/auth/register")) {
+    const { email, password, full_name } = body;
+    const existing = mockUsers.get(email);
+    if (existing) {
+      if (!existing.verified) return json({ needsVerification: true, emailSent: true });
+      return json({ message: "Este correo ya está registrado" }, 400);
+    }
+    mockUsers.set(email, { password, full_name, verified: false, id: `mock-${email}` });
+    return json({ needsVerification: true, emailSent: true }, 201);
+  }
+
+  if (path.endsWith("/auth/login")) {
+    const { email, password } = body;
+    const u = mockUsers.get(email);
+    if (!u || u.password !== password) return json({ message: "Correo o contraseña incorrectos" }, 401);
+    if (!u.verified) {
+      return json({ message: "Verifica tu correo antes de iniciar sesión.", needsVerification: true }, 403);
+    }
+    return json({ token: "mock-jwt", user: { id: u.id, email, full_name: u.full_name, is_admin: false } });
+  }
+
+  return json({ message: "not found (unhandled path in mockAuthFetch)" }, 404);
+}
+
+beforeEach(() => {
+  mockUsers = new Map();
+  vi.stubGlobal("fetch", vi.fn(mockAuthFetch));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -180,36 +241,57 @@ describe("Scenario 4: Wrong email domain", () => {
 // SCENARIO 5: Duplicate registration
 // ---------------------------------------------------------------------------
 describe("Scenario 5: Duplicate registration", () => {
-  it("second registration with same email fails", async () => {
-    await register("Ana", "Lopez", "ana@ldk.lat", "pass123");
-    const second = await register("Ana", "Lopez", "ana@ldk.lat", "otherpass");
+  it("registering the same still-unverified email again resends verification instead of hard-failing", async () => {
+    // Lets someone who lost the first email or mistyped their password
+    // recover without needing an admin to delete a stale row.
+    const first = await register("Test", "Dup", "dup1@ldk.lat", "pass123");
+    expect(first.success).toBe(true);
+    const second = await register("Test", "Dup", "dup1@ldk.lat", "otherpass");
+    expect(second.success).toBe(true);
+    expect(second.needsVerification).toBe(true);
+  });
+
+  it("registering an email that's already verified fails as a real duplicate", async () => {
+    await register("Test", "Dup", "dup2@ldk.lat", "pass123");
+    markVerified("dup2@ldk.lat");
+    const second = await register("Test", "Dup", "dup2@ldk.lat", "otherpass");
     expect(second.success).toBe(false);
     expect(second.error).toBeTruthy();
   });
 });
 
 // ---------------------------------------------------------------------------
-// SCENARIO 6: Auth — login/logout/session
+// SCENARIO 6: Auth — login/logout/session, gated on email verification
 // ---------------------------------------------------------------------------
 describe("Scenario 6: Login, logout, session persistence", () => {
-  it("login with wrong password fails", async () => {
-    await register("Carlos", "Ruiz", "carlos@ldk.lat", "correctpass");
-    const result = await login("carlos@ldk.lat", "wrongpass");
+  it("a freshly-registered (unverified) account cannot log in yet", async () => {
+    await register("Carlos", "Ruiz", "carlos-test@ldk.lat", "correctpass");
+    const result = await login("carlos-test@ldk.lat", "correctpass");
+    expect(result.success).toBe(false);
+    expect(result.needsVerification).toBe(true);
+  });
+
+  it("login with wrong password fails (even once verified)", async () => {
+    await register("Carlos", "Ruiz", "carlos-test@ldk.lat", "correctpass");
+    markVerified("carlos-test@ldk.lat");
+    const result = await login("carlos-test@ldk.lat", "wrongpass");
     expect(result.success).toBe(false);
   });
 
-  it("login with correct password succeeds and sets session", async () => {
-    await register("Carlos", "Ruiz", "carlos@ldk.lat", "correctpass");
-    logout(); // clear session set by register
-    const result = await login("carlos@ldk.lat", "correctpass");
+  it("login with correct password succeeds and sets session once verified", async () => {
+    await register("Carlos", "Ruiz", "carlos-test@ldk.lat", "correctpass");
+    markVerified("carlos-test@ldk.lat");
+    const result = await login("carlos-test@ldk.lat", "correctpass");
     expect(result.success).toBe(true);
     const session = getCurrentSession();
-    expect(session?.email).toBe("carlos@ldk.lat");
+    expect(session?.email).toBe("carlos-test@ldk.lat");
     expect(session?.firstName).toBe("Carlos");
   });
 
   it("logout clears the session", async () => {
-    await register("Carlos", "Ruiz", "carlos@ldk.lat", "correctpass");
+    await register("Carlos", "Ruiz", "carlos-test@ldk.lat", "correctpass");
+    markVerified("carlos-test@ldk.lat");
+    await login("carlos-test@ldk.lat", "correctpass");
     logout();
     expect(getCurrentSession()).toBeNull();
   });

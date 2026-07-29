@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { login } from "@/lib/auth";
+import { login, resendVerificationEmail } from "@/lib/auth";
 import { useAuth } from "@/context/AuthContext";
 import ldkLogo from "@/assets/logo-ldk.jpeg";
 
@@ -11,10 +11,18 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // True when login failed specifically because the account hasn't clicked
+  // its verification link yet — offers a resend action instead of just
+  // reading as a wrong-password error.
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resent, setResent] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setNeedsVerification(false);
+    setResent(false);
     setLoading(true);
     const result = await login(email, password);
     if (result.success) {
@@ -23,7 +31,15 @@ export default function Login() {
     } else {
       setLoading(false);
       setError(result.error || "Error al iniciar sesión");
+      setNeedsVerification(!!result.needsVerification);
     }
+  };
+
+  const handleResend = async () => {
+    setResending(true);
+    await resendVerificationEmail(email);
+    setResending(false);
+    setResent(true);
   };
 
   return (
@@ -84,6 +100,23 @@ export default function Login() {
             <div className="bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 text-xs text-destructive font-medium">
               {error}
             </div>
+          )}
+
+          {needsVerification && (
+            resent ? (
+              <div className="bg-success/10 border border-success/20 rounded-lg px-3 py-2 text-xs text-success font-medium">
+                Te enviamos un nuevo enlace de verificación. Revisa tu bandeja de entrada.
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={resending}
+                className="text-xs font-semibold text-primary hover:underline disabled:opacity-50 text-left"
+              >
+                {resending ? "Enviando..." : "Reenviar correo de verificación"}
+              </button>
+            )
           )}
 
           <button

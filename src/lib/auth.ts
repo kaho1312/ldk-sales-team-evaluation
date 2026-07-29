@@ -36,12 +36,17 @@ function storeSession(token: string, user: StoredUser) {
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
 
+// Registering does NOT log the agent in — the account is created unverified
+// and can't be used until the emailed link is clicked (see verifyEmail below).
+// `needsVerification` is true on success so the UI can show "check your
+// email" instead of navigating in; `emailSent` distinguishes "check your
+// email" from "account created but the email failed to send" (Resend outage).
 export async function register(
   firstName: string,
   lastName: string,
   email: string,
   password: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; needsVerification?: boolean; emailSent?: boolean }> {
   const normalizedEmail = email.toLowerCase().trim();
   if (!isEmailValid(normalizedEmail)) return { success: false, error: "El correo debe ser del dominio @ldk.lat" };
   if (!firstName.trim() || !lastName.trim()) return { success: false, error: "Nombre y apellido son requeridos" };
@@ -55,17 +60,19 @@ export async function register(
     });
     const data = await res.json();
     if (!res.ok) return { success: false, error: data.message || "Error al crear la cuenta" };
-    storeSession(data.token, data.user);
-    return { success: true };
+    return { success: true, needsVerification: !!data.needsVerification, emailSent: data.emailSent !== false };
   } catch {
     return { success: false, error: "Error de conexión" };
   }
 }
 
+// `needsVerification` is set when the credentials were correct but the account
+// hasn't clicked its verification link yet (backend 403) — lets the UI offer a
+// "resend the email" action instead of a plain "wrong password" message.
 export async function login(
   email: string,
   password: string,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; error?: string; needsVerification?: boolean }> {
   try {
     const res = await fetch(apiUrl("/auth/login"), {
       method: "POST",
@@ -73,7 +80,7 @@ export async function login(
       body: JSON.stringify({ email: email.toLowerCase().trim(), password }),
     });
     const data = await res.json();
-    if (!res.ok) return { success: false, error: data.message || "Correo o contraseña incorrectos" };
+    if (!res.ok) return { success: false, error: data.message || "Correo o contraseña incorrectos", needsVerification: !!data.needsVerification };
     storeSession(data.token, data.user);
     return { success: true };
   } catch {
@@ -118,6 +125,46 @@ export async function resetPassword(token: string, password: string): Promise<{ 
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) return { success: false, error: data.message || "El enlace es inválido o ha expirado" };
+    return { success: true };
+  } catch {
+    return { success: false, error: "Error de conexión" };
+  }
+}
+
+// ── Email verification ────────────────────────────────────────────────────────
+
+// Consume a token from the verification email link. On success the backend
+// also logs the account in (same shape as login), so the session is stored
+// here just like a normal login.
+export async function verifyEmail(token: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(apiUrl("/auth/verify"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { success: false, error: data.message || "El enlace de verificación es inválido o ha expirado" };
+    storeSession(data.token, data.user);
+    return { success: true };
+  } catch {
+    return { success: false, error: "Error de conexión" };
+  }
+}
+
+// Request a fresh verification link. The backend always responds 200 (never
+// reveals whether the email is registered or already verified).
+export async function resendVerificationEmail(email: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch(apiUrl("/auth/resend-verification"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email.toLowerCase().trim() }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { success: false, error: data.message || "No se pudo procesar la solicitud" };
+    }
     return { success: true };
   } catch {
     return { success: false, error: "Error de conexión" };
